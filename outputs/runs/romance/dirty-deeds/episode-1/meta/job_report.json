@@ -1,0 +1,130 @@
+{
+  "input": {
+    "pdf_path": "https://www.webtoons.com/en/romance/dirty-deeds/episode-1/viewer?title_no=8808&episode_no=1",
+    "subtitles": true,
+    "target_duration_sec": null,
+    "max_panels": 10,
+    "bgm_path": null
+  },
+  "stages": {
+    "preflight": {
+      "ok": true
+    },
+    "webtoon_loader": {
+      "panels": 115,
+      "source": "webtoon_url"
+    },
+    "panel_limit": {
+      "requested_max_panels": 10,
+      "original_panels": 115,
+      "selected_panels": 10
+    },
+    "panel_qa": {
+      "count": 10,
+      "missing_count": 0,
+      "unreadable_count": 0,
+      "total_bytes": 435180,
+      "missing_examples": [],
+      "unreadable_examples": []
+    },
+    "ocr_engine": {
+      "items": 10,
+      "model": "gpt-4o-mini",
+      "elapsed_ms": 17937
+    },
+    "script_cleaner": {
+      "lines": 10,
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "elapsed_ms": 8480
+    },
+    "narrator": {
+      "segments": 9,
+      "provider": "auto",
+      "openai_tts_model": "gpt-4o-mini-tts",
+      "elapsed_ms": 11797
+    },
+    "timeline_builder": {
+      "entries": 10
+    },
+    "panel_animator": {
+      "clips": 10
+    },
+    "subtitle_generator": {
+      "entries": 9
+    },
+    "video_editor": {
+      "video_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/final/video.mp4"
+    },
+    "quality_checker": {
+      "ok": true,
+      "duration_sec": 23.366667,
+      "has_audio": true,
+      "has_video": true,
+      "checks": {
+        "duration_within_bounds": false,
+        "video_stream_present": true,
+        "audio_stream_present": true
+      },
+      "warnings": [
+        "Duration out of bounds: 23.37s"
+      ]
+    }
+  },
+  "warnings": [],
+  "artifacts": {
+    "openai_narration": [
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0001.jpg",
+        "emotion": "ominous",
+        "narration": "WARNING"
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0002.jpg",
+        "emotion": "frustration",
+        "narration": "It felt so unfair."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0003.jpg",
+        "emotion": "despair",
+        "narration": "One fleeting moment, and misfortune swallowed me whole."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0004.jpg",
+        "emotion": "hopelessness",
+        "narration": "Yet, again and again..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0005.jpg",
+        "emotion": "",
+        "narration": ""
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0006.jpg",
+        "emotion": "exhaustion",
+        "narration": "Huu."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0007.jpg",
+        "emotion": "sorrow",
+        "narration": "...I'm made to feel as if I was born only to suffer."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0008.jpg",
+        "emotion": "exhaustion",
+        "narration": "Haa..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0009.jpg",
+        "emotion": "exhaustion",
+        "narration": "Haa..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0010.jpg",
+        "emotion": "melancholy",
+        "narration": "...The wind stirs..."
+      }
+    ]
+  },
+  "elapsed_sec": 50.651
+}

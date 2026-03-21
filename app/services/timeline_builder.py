@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from app.config import settings
+from app.models.schemas import AudioSegment, PanelAsset, ScriptLine, TimelineEntry
+
+
+def _clamp_duration(duration: float) -> float:
+    return max(settings.min_panel_duration_sec, min(settings.max_panel_duration_sec, duration))
+
+
+def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: list[AudioSegment]) -> list[TimelineEntry]:
+    if not panels:
+        return []
+
+    if script:
+        lines = script
+    elif settings.subtitle_strict_from_script:
+        lines = [ScriptLine(panel_path=panels[i].image_path, narration="", emotion="neutral") for i in range(len(panels))]
+    else:
+        lines = [ScriptLine(panel_path=panels[i].image_path, narration="...", emotion="neutral") for i in range(len(panels))]
+    out: list[TimelineEntry] = []
+    cursor = 0.0
+    line_by_panel_path = {line.panel_path: line for line in lines}
+    panel_audio_by_path: dict[str, AudioSegment] = {}
+    for seg in audio:
+        if 0 <= seg.line_index < len(lines):
+            line = lines[seg.line_index]
+            panel_audio_by_path[line.panel_path] = seg
+    has_audio_timing = len(panel_audio_by_path) > 0
+
+    for panel in panels:
+        line = line_by_panel_path.get(panel.image_path)
+        narration = line.narration if line else ("" if settings.subtitle_strict_from_script else "...")
+        seg = panel_audio_by_path.get(panel.image_path)
+        if seg is not None:
+            # When audio exists, use it as source-of-truth for panel duration.
+            dur = max(0.1, seg.duration_sec)
+        else:
+            dur = settings.min_panel_duration_sec
+        start = cursor
+        end = start + dur
+        out.append(
+            TimelineEntry(
+                panel_path=panel.image_path,
+                narration=narration,
+                start_sec=start,
+                end_sec=end,
+                duration_sec=dur,
+            )
+        )
+        cursor = end
+
+    total = out[-1].end_sec if out else 0
+    if total < settings.min_video_duration_sec and out and not has_audio_timing:
+        multiplier = settings.min_video_duration_sec / total
+        cursor = 0.0
+        for item in out:
+            item.duration_sec = _clamp_duration(item.duration_sec * multiplier)
+            item.start_sec = cursor
+            item.end_sec = cursor + item.duration_sec
+            cursor = item.end_sec
+
+    if has_audio_timing:
+        return out
+
+    # Trim if beyond max duration.
+    filtered: list[TimelineEntry] = []
+    for item in out:
+        if item.start_sec >= settings.max_video_duration_sec:
+            break
+        item.end_sec = min(item.end_sec, float(settings.max_video_duration_sec))
+        item.duration_sec = item.end_sec - item.start_sec
+        filtered.append(item)
+    return filtered

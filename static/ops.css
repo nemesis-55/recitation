@@ -1,0 +1,199 @@
+:root {
+  --bg: #0f172a;
+  --panel: #111827;
+  --border: #273449;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #3b82f6;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #0b1220, #0f172a);
+  color: var(--text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.topbar {
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px;
+  background: rgba(15, 23, 42, 0.92);
+  position: sticky;
+  top: 0;
+}
+.topbar h1 { margin: 0; font-size: 22px; }
+.topbar p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+.grid {
+  padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.card {
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+.full { grid-column: 1 / -1; }
+
+h2 { margin-top: 0; font-size: 18px; }
+.subtle { color: var(--muted); margin-top: -6px; margin-bottom: 12px; font-size: 13px; }
+label { display: block; margin: 10px 0 6px; color: var(--muted); font-size: 13px; }
+input, select, button, pre {
+  width: 100%;
+  border-radius: 8px;
+}
+input, select {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px;
+}
+button {
+  margin-top: 14px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+button:hover { opacity: 0.92; }
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.card-header button {
+  width: auto;
+  margin: 0;
+  padding: 8px 12px;
+}
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.auto-refresh { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.auto-refresh input { width: auto; }
+.filters {
+  display: grid;
+  grid-template-columns: 1fr 180px;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.runs-list { display: grid; gap: 10px; }
+.run-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.run-item button {
+  width: auto;
+  margin: 0 0 0 8px;
+  padding: 6px 10px;
+}
+.run-item small { color: var(--muted); display: block; margin-top: 2px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.status {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-right: 6px;
+  font-size: 11px;
+  text-transform: lowercase;
+}
+.status-completed { color: var(--ok); }
+.status-failed { color: #f87171; }
+.status-in_progress { color: #93c5fd; }
+.status-unknown { color: var(--muted); }
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+.pager button { width: auto; margin: 0; padding: 6px 10px; }
+.run-summary { color: #cbd5e1; margin-bottom: 10px; font-size: 13px; }
+.inline-error {
+  border: 1px solid #7f1d1d;
+  background: rgba(127, 29, 29, 0.25);
+  color: #fecaca;
+  border-radius: 8px;
+  padding: 10px;
+  margin: 10px 0;
+}
+.hidden { display: none; }
+.run-video {
+  width: 100%;
+  max-height: 720px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #000;
+}
+
+pre {
+  background: #0a0f1d;
+  border: 1px solid var(--border);
+  color: #cbd5e1;
+  padding: 12px;
+  overflow: auto;
+  min-height: 120px;
+}
+
+.narration-visual {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.narration-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: linear-gradient(160deg, rgba(27, 37, 59, 0.85), rgba(13, 19, 36, 0.95));
+}
+.narration-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #c7d2fe;
+}
+.emotion {
+  text-transform: capitalize;
+  color: #fca5a5;
+  font-size: 12px;
+}
+.narration-card p {
+  margin: 0 0 10px;
+  line-height: 1.4;
+  color: #e2e8f0;
+}
+.narration-card small {
+  color: #94a3b8;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.narration-empty {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  color: var(--muted);
+}
