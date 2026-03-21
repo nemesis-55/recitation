@@ -52,7 +52,11 @@ class ScriptLine(BaseModel):
     speaker: str = "unknown_1"
     gender: str = "unknown"
     emotion: str = "neutral"
+    emotion_intensity: float = 0.5
     voice: Optional[str] = None
+    rendered_text: Optional[str] = None
+    pause_sec: Optional[float] = None
+    tts_provider: Optional[str] = None
 
 
 class AudioSegment(BaseModel):
@@ -61,6 +65,10 @@ class AudioSegment(BaseModel):
     start_sec: float
     end_sec: float
     duration_sec: float
+    pause_sec: float = 0.0
+    provider: Optional[str] = None
+    voice: Optional[str] = None
+    rendered_text: Optional[str] = None
 
 
 class TimelineEntry(BaseModel):
@@ -84,5 +92,6 @@ class QualityReport(BaseModel):
     duration_sec: float
     has_audio: bool
     has_video: bool
+    av_delta_sec: float = 0.0
     checks: dict[str, Any]
     warnings: list[str] = Field(default_factory=list)

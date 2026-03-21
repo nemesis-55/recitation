@@ -6,8 +6,8 @@ Detailed technical guide: see [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATI
 
 ## Features
 
-- End-to-end flow: PDF -> pages -> panels -> OCR -> OpenAI script cleaning -> Runway TTS -> panel animation -> timeline -> subtitles -> final video.
-- Strict fail-fast provider policy: if OpenAI or Runway fails, job stops with structured error.
+- End-to-end flow: PDF -> pages -> panels -> OCR -> OpenAI script cleaning -> ElevenLabs TTS -> panel animation -> timeline -> subtitles -> final video.
+- Strict fail-fast provider policy: if OpenAI or ElevenLabs fails, job stops with structured error.
 - Vertical output (`1080x1920`) with Ken Burns style motion from original manga panels only.
 - Stage artifacts and job report under `outputs/runs/<run_key>/`.
 - Webtoon runs use nested folders: `outputs/runs/<genre>/<title>/<episode>/`.
@@ -33,7 +33,7 @@ manga_video_pipeline/
 - Python 3.10+
 - FFmpeg and FFprobe installed in PATH
 - Poppler installed (required by `pdf2image`)
-- OpenAI and Runway API keys
+- OpenAI and ElevenLabs API keys
 
 ## Environment
 
@@ -41,7 +41,7 @@ Create `.env` in repo root:
 
 ```env
 OPENAI_API_KEY=your_openai_key
-RUNWAY_API_KEY=your_runway_key
+ELEVENLABS_API_KEY=your_elevenlabs_key
 LOG_LEVEL=INFO
 ```
 
@@ -122,7 +122,7 @@ Fail response:
 ## Operational Notes
 
 - No default provider fallback is used.
-- If OpenAI or Runway errors, pipeline aborts immediately.
+- If OpenAI or ElevenLabs errors, pipeline aborts immediately.
 - Each stage emits structured logs and timing data.
 - A `job_report.json` is generated per run for troubleshooting.
 - Ops API supports nested run keys (example: `romance/dirty-deeds/episode-1`) in run-detail routes.

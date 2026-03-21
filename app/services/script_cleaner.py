@@ -147,6 +147,15 @@ def _normalize_speaker_and_gender(speaker: str, gender: str) -> tuple[str, str]:
 
 def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptLine]:
     payload = [{"panel_path": item.panel_path, "text": item.text, "low_confidence": item.low_confidence} for item in raw_text_list]
+    non_empty_indices = [
+        idx
+        for idx, item in enumerate(raw_text_list)
+        if (item.text or "").strip()
+    ]
+    if settings.openai_skip_empty_ocr_for_cleaner and non_empty_indices:
+        llm_items = [raw_text_list[idx] for idx in non_empty_indices]
+    else:
+        llm_items = raw_text_list
 
     prompt = (
         "You are an expert dialogue analyst for manga and comics.\n"
@@ -161,7 +170,7 @@ def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptL
         "Keep same speaker ID consistent within the provided sequence.\n"
         "Keep order exactly matching input items. One output object per input item.\n"
         "If text is unreadable or empty, return empty string for text, speaker unknown_1, gender unknown, emotion neutral.\n"
-        f"Input OCR items:\n{json.dumps(payload, ensure_ascii=True)}"
+        f"Input OCR items:\n{json.dumps(_to_payload(llm_items), ensure_ascii=True)}"
     )
     request_payload = {
         "model": settings.openai_model,
@@ -193,7 +202,7 @@ def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptL
             logger.warning(
                 "script_cleaner retry attempt=%s batch_size=%s delay_sec=%.2f error=%s",
                 attempt + 1,
-                len(raw_text_list),
+                len(llm_items),
                 delay,
                 exc,
             )
@@ -206,11 +215,17 @@ def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptL
         raise ProviderError("script_cleaner", "openai", "OpenAI returned non-list output", "OPENAI_INVALID_OUTPUT")
 
     result: list[ScriptLine] = []
-    normalized: list[dict] = [item for item in data if isinstance(item, dict)]
-    if len(normalized) < len(raw_text_list):
-        normalized.extend([{"text": "", "speaker": "unknown_1", "gender": "unknown", "emotion": "neutral"}] * (len(raw_text_list) - len(normalized)))
-    if len(normalized) > len(raw_text_list):
-        normalized = normalized[: len(raw_text_list)]
+    normalized_llm: list[dict] = [item for item in data if isinstance(item, dict)]
+    if len(normalized_llm) < len(llm_items):
+        normalized_llm.extend([{"text": "", "speaker": "unknown_1", "gender": "unknown", "emotion": "neutral"}] * (len(llm_items) - len(normalized_llm)))
+    if len(normalized_llm) > len(llm_items):
+        normalized_llm = normalized_llm[: len(llm_items)]
+    normalized: list[dict] = [{"text": "", "speaker": "unknown_1", "gender": "unknown", "emotion": "neutral"} for _ in raw_text_list]
+    if settings.openai_skip_empty_ocr_for_cleaner and non_empty_indices:
+        for i, src_idx in enumerate(non_empty_indices):
+            normalized[src_idx] = normalized_llm[i]
+    else:
+        normalized = normalized_llm
 
     for idx, item in enumerate(normalized):
         try:

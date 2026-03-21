@@ -21,20 +21,22 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
     out: list[TimelineEntry] = []
     cursor = 0.0
     line_by_panel_path = {line.panel_path: line for line in lines}
-    panel_audio_by_path: dict[str, AudioSegment] = {}
+    panel_audio_duration_by_path: dict[str, float] = {}
     for seg in audio:
         if 0 <= seg.line_index < len(lines):
             line = lines[seg.line_index]
-            panel_audio_by_path[line.panel_path] = seg
-    has_audio_timing = len(panel_audio_by_path) > 0
+            panel_audio_duration_by_path[line.panel_path] = panel_audio_duration_by_path.get(line.panel_path, 0.0) + max(
+                0.0, seg.duration_sec
+            )
+    has_audio_timing = len(panel_audio_duration_by_path) > 0
 
     for panel in panels:
         line = line_by_panel_path.get(panel.image_path)
         narration = line.narration if line else ("" if settings.subtitle_strict_from_script else "...")
-        seg = panel_audio_by_path.get(panel.image_path)
-        if seg is not None:
+        panel_audio_duration = panel_audio_duration_by_path.get(panel.image_path)
+        if panel_audio_duration is not None:
             # When audio exists, use it as source-of-truth for panel duration.
-            dur = max(0.1, seg.duration_sec)
+            dur = max(0.1, panel_audio_duration)
         else:
             # Keep textless/unvoiced panels visible long enough; do not skip too fast.
             dur = max(settings.min_panel_duration_sec, 2.0)

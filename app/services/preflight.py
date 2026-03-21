@@ -3,20 +3,41 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import requests
+
 from app.config import settings
 from app.models.schemas import PageAsset
 from app.services.webtoon_loader import is_webtoon_url
 from app.utils.errors import ValidationError
 
 
+def _validate_elevenlabs_auth() -> None:
+    headers = {"xi-api-key": str(settings.elevenlabs_api_key)}
+    try:
+        # ElevenLabs developer APIs accept xi-api-key header.
+        resp = requests.get("https://api.elevenlabs.io/v1/user", headers=headers, timeout=min(settings.provider_timeout_sec, 10))
+        if resp.status_code == 401:
+            raise ValidationError(
+                "preflight",
+                "ELEVENLABS_API_KEY is unauthorized (401). Use a valid key from ElevenLabs developers dashboard.",
+                "INVALID_ELEVENLABS_API_KEY",
+            )
+        resp.raise_for_status()
+    except ValidationError:
+        raise
+    except Exception as exc:
+        raise ValidationError("preflight", f"ElevenLabs auth check failed: {exc}", "ELEVENLABS_AUTH_CHECK_FAILED") from exc
+
+
 def run_preflight(source_path: str) -> None:
     if not settings.openai_api_key:
         raise ValidationError("preflight", "OPENAI_API_KEY is missing", "MISSING_OPENAI_API_KEY")
-    tts_provider = (settings.tts_provider or "auto").lower()
-    if tts_provider not in {"auto", "openai", "runway"}:
+    tts_provider = (settings.tts_provider or "elevenlabs").lower()
+    if tts_provider != "elevenlabs":
         raise ValidationError("preflight", f"Unsupported TTS_PROVIDER: {settings.tts_provider}", "INVALID_TTS_PROVIDER")
-    if tts_provider == "runway" and not settings.runway_api_key:
-        raise ValidationError("preflight", "RUNWAY_API_KEY is missing", "MISSING_RUNWAY_API_KEY")
+    if not settings.elevenlabs_api_key:
+        raise ValidationError("preflight", "ELEVENLABS_API_KEY is missing", "MISSING_ELEVENLABS_API_KEY")
+    _validate_elevenlabs_auth()
     if not is_webtoon_url(source_path):
         source = Path(source_path)
         if not source.exists():

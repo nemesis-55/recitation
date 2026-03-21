@@ -80,10 +80,10 @@ def assemble_video(
                 f"[{narration_index}:a]volume=1.0[narr];"
                 f"[{bgm_index}:a]volume={settings.bgm_volume}[bgm];"
                 "[narr][bgm]amix=inputs=2:duration=first:dropout_transition=2[mix];"
-                f"[mix]atempo={playback_speed}[aout]"
+                f"[mix]atempo={playback_speed},aresample=async=1:first_pts=0[aout]"
             )
         else:
-            filter_complex = f"{video_filter};[{narration_index}:a]atempo={playback_speed}[aout]"
+            filter_complex = f"{video_filter};[{narration_index}:a]atempo={playback_speed},aresample=async=1:first_pts=0[aout]"
         local_maps.extend(["-map", "[aout]"])
         audio_from_filter = True
 
@@ -99,6 +99,8 @@ def assemble_video(
             "libx264",
             "-pix_fmt",
             "yuv420p",
+            "-movflags",
+            "+faststart",
         ]
         if audio_from_filter:
             cmd.extend(["-c:a", "aac"])

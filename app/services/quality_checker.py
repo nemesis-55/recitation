@@ -10,6 +10,16 @@ from app.utils.errors import ValidationError
 from app.utils.ffmpeg_runner import probe_duration_seconds
 
 
+def _stream_duration(stream: dict) -> float | None:
+    raw = stream.get("duration")
+    if raw in (None, "", "N/A"):
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        return None
+
+
 def _probe_streams(video_path: Path) -> dict:
     command = [
         "ffprobe",
@@ -36,19 +46,36 @@ def check_video(video_path: Path) -> QualityReport:
     streams = data.get("streams", [])
     has_video = any(s.get("codec_type") == "video" for s in streams)
     has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    video_duration = next((_stream_duration(s) for s in streams if s.get("codec_type") == "video" and _stream_duration(s) is not None), duration)
+    audio_duration = next((_stream_duration(s) for s in streams if s.get("codec_type") == "audio" and _stream_duration(s) is not None), duration)
+    av_delta_sec = abs(video_duration - audio_duration)
 
     duration_within_bounds = settings.min_video_duration_sec <= duration <= settings.max_video_duration_sec
+    av_sync_within_bounds = av_delta_sec <= settings.av_sync_max_delta_sec
     checks = {
         "duration_within_bounds": duration_within_bounds,
+        "av_sync_within_bounds": av_sync_within_bounds,
         "video_stream_present": has_video,
         "audio_stream_present": has_audio,
     }
     warnings = []
     if not duration_within_bounds:
         warnings.append(f"Duration out of bounds: {duration:.2f}s")
+    if not av_sync_within_bounds:
+        warnings.append(
+            f"A/V delta exceeds threshold: delta={av_delta_sec:.3f}s threshold={settings.av_sync_max_delta_sec:.3f}s"
+        )
 
     # Duration bounds are advisory; stream presence is mandatory.
     ok = checks["video_stream_present"] and checks["audio_stream_present"]
     if not ok:
         raise ValidationError("quality_checker", f"Video quality gates failed: {checks}", "QUALITY_GATE_FAILED")
-    return QualityReport(ok=ok, duration_sec=duration, has_audio=has_audio, has_video=has_video, checks=checks, warnings=warnings)
+    return QualityReport(
+        ok=ok,
+        duration_sec=duration,
+        has_audio=has_audio,
+        has_video=has_video,
+        av_delta_sec=av_delta_sec,
+        checks=checks,
+        warnings=warnings,
+    )

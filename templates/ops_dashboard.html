@@ -216,8 +216,8 @@
               <span class="badge">${idx + 1}</span>
               <span class="emotion">${emotion}</span>
             </header>
-            <small>speaker: ${line.speaker || "unknown_1"} | gender: ${line.gender || "unknown"} | voice: ${line.voice || "-"}</small>
-            <p>${line.narration || ""}</p>
+            <small>speaker: ${line.speaker || "unknown_1"} | gender: ${line.gender || "unknown"} | provider: ${line.tts_provider || "-"} | voice: ${line.voice || "-"} | pause: ${line.pause_sec ?? "-"}s | intensity: ${line.emotion_intensity ?? "-"}</small>
+            <p>${line.rendered_text || line.narration || ""}</p>
             <small title="${line.panel_path || ""}">${line.panel_path || ""}</small>
           `;
           container.appendChild(card);

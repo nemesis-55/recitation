@@ -91,20 +91,31 @@ Normalization rules include:
 
 ---
 
-## Voice Routing and TTS
+## Voice Acting Engine (Audio-First)
 
-The TTS layer supports dynamic per-line voice assignment:
+The TTS layer supports dynamic per-line voice assignment and provider fallback:
 - Narrator lines use narrator voice
 - Gender-based assignment for male/female
 - Unknown-gender lines can alternate between male/female reciter voices
 - Emotion overrides can map specific emotions to preferred voices
+- Emotion intensity (`0..1`) is estimated from punctuation/casing patterns
+- Rendered speech text is produced before TTS (fear hesitation, sad trailing, angry emphasis)
+- Emotion-aware pause engine inserts per-line pacing and serializes audio timeline metadata
 
-Primary provider behavior:
-- OpenAI TTS preferred when available/configured
+Provider behavior:
+- Auto mode follows `TTS_PROVIDER_ORDER` (default `elevenlabs`)
+- `TTS_PROVIDER` is fixed to ElevenLabs for narration (`elevenlabs`)
 - Retry logic with provider timeout and retries
 - Binary audio cache reuse when enabled
 
 Important environment knobs:
+- `ELEVENLABS_API_KEY`
+- `ELEVENLABS_API_BASE_URL`
+- `ELEVENLABS_TTS_MODEL`
+- `ELEVENLABS_VOICE_MALE`
+- `ELEVENLABS_VOICE_FEMALE`
+- `ELEVENLABS_VOICE_UNKNOWN`
+- `ELEVENLABS_VOICE_NARRATOR`
 - `OPENAI_TTS_MODEL`
 - `OPENAI_TTS_VOICE`
 - `OPENAI_TTS_VOICE_MALE`
@@ -113,6 +124,7 @@ Important environment knobs:
 - `OPENAI_TTS_VOICE_NARRATOR`
 - `OPENAI_TTS_EMOTION_OVERRIDES`
 - `TTS_PROVIDER`
+- `TTS_PROVIDER_ORDER`
 
 ---
 
@@ -123,7 +135,7 @@ Sync is enforced in multiple layers:
 1. Timeline uses audio duration as source-of-truth when segment audio exists.
 2. Panels with no text/audio get minimum hold duration to avoid fast visual skipping.
 3. Final assembly merges timeline-derived clips with narration, then applies shared speed factor.
-4. Quality check verifies streams and duration bounds.
+4. Quality check verifies streams, duration bounds, and A/V delta metric (`av_delta_sec`).
 
 If you observe drift:
 - Compare stream durations with `ffprobe`
@@ -171,11 +183,13 @@ Notes:
 Core:
 - `OPENAI_API_KEY`
 - `RUNWAY_API_KEY`
+- `ELEVENLABS_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_TTS_MODEL`
 - `TTS_PROVIDER`
 - `PROVIDER_TIMEOUT_SEC`
 - `PROVIDER_RETRIES`
+- `AV_SYNC_MAX_DELTA_SEC`
 
 OCR:
 - `OPENAI_OCR_BATCH_SIZE`

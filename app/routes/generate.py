@@ -144,17 +144,6 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 "elapsed_ms": round((time.time() - api_start) * 1000),
             }
             report["artifacts"] = report.get("artifacts", {})
-            report["artifacts"]["openai_narration"] = [
-                {
-                    "panel_path": line.panel_path,
-                    "speaker": line.speaker,
-                    "gender": line.gender,
-                    "voice": line.voice,
-                    "emotion": line.emotion,
-                    "narration": line.narration,
-                }
-                for line in script
-            ]
 
         with StageTimer(logger, "narrator"):
             stage_start = time.time()
@@ -164,9 +153,27 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             report["stages"]["narrator"] = {
                 "segments": len(audio_segments),
                 "provider": settings.tts_provider,
-                "openai_tts_model": settings.openai_tts_model,
+                "provider_order": settings.tts_provider_order,
+                "elevenlabs_tts_model": settings.elevenlabs_tts_model,
                 "elapsed_ms": round((time.time() - api_start) * 1000),
             }
+            report["artifacts"]["openai_narration"] = [
+                {
+                    "panel_path": line.panel_path,
+                    "speaker": line.speaker,
+                    "gender": line.gender,
+                    "voice": line.voice,
+                    "tts_provider": line.tts_provider,
+                    "emotion": line.emotion,
+                    "emotion_intensity": line.emotion_intensity,
+                    "rendered_text": line.rendered_text,
+                    "pause_sec": line.pause_sec,
+                    "narration": line.narration,
+                }
+                for line in script
+            ]
+            report["artifacts"]["audio_timeline"] = [seg.model_dump() for seg in audio_segments]
+            write_json(dirs["meta"] / "audio_timeline.json", [seg.model_dump() for seg in audio_segments])
 
         with StageTimer(logger, "timeline_builder"):
             stage_start = time.time()
@@ -194,6 +201,10 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 subtitles_path, subtitle_entries = generate_subtitles(timeline, dirs["final"] / "subtitles.srt")
                 _enforce_stage_timeout("subtitle_generator", stage_start)
                 report["stages"]["subtitle_generator"] = {"entries": len(subtitle_entries)}
+                if not subtitle_entries:
+                    # Avoid ffmpeg failing on empty/invalid subtitle track input.
+                    subtitles_path = None
+                    report["warnings"].append("Subtitles disabled: no subtitle entries generated.")
 
         with StageTimer(logger, "video_editor"):
             stage_start = time.time()
