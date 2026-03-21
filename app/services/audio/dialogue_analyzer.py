@@ -17,5 +17,6 @@ def estimate_emotion_intensity(text: str, emotion: str) -> float:
 
 def analyze_dialogue(script: list[ScriptLine]) -> list[ScriptLine]:
     for line in script:
-        line.emotion_intensity = estimate_emotion_intensity(line.narration or "", line.emotion or "neutral")
+        if line.emotion_intensity is None:
+            line.emotion_intensity = estimate_emotion_intensity(line.narration or "", line.emotion or "neutral")
     return script

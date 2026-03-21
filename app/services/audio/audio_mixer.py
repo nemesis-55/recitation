@@ -7,7 +7,35 @@ from app.services.audio.timeline_builder import AudioEvent
 from app.utils.ffmpeg_runner import run_ffmpeg
 
 
-def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path) -> Path:
+def _mix_voice_and_music(base_track: Path, music_path: Path | None, work_dir: Path) -> Path:
+    if not music_path or not music_path.exists():
+        return base_track
+    out = work_dir / "voice_with_music_bed.mp3"
+    vol = max(0.0, min(1.0, float(settings.audio_music_volume)))
+    run_ffmpeg(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(base_track),
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(music_path),
+            "-filter_complex",
+            f"[1:a]volume={vol}[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[aout]",
+            "-map",
+            "[aout]",
+            "-c:a",
+            "libmp3lame",
+            str(out),
+        ],
+        stage="audio_mixer",
+    )
+    return out
+
+
+def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music_path: Path | None = None) -> Path:
     voice_and_pause = [e for e in events if e.type in {"voice", "pause"}]
     sfx_events = [e for e in events if e.type == "sfx"]
     concat_list = work_dir / "audio_concat.txt"
@@ -29,11 +57,14 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path) -> Pa
         ],
         stage="audio_mixer",
     )
+
+    mixed_voice = _mix_voice_and_music(base_track, music_path, work_dir)
+
     if not sfx_events:
-        output_path.write_bytes(base_track.read_bytes())
+        output_path.write_bytes(mixed_voice.read_bytes())
         return output_path
 
-    inputs = ["-i", str(base_track)]
+    inputs = ["-i", str(mixed_voice)]
     filters = []
     mix_inputs = ["[0:a]"]
     next_input_index = 1

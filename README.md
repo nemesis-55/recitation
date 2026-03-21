@@ -1,15 +1,18 @@
 # Manga Video Pipeline
 
-Production-oriented pipeline that converts a manga PDF into a vertical cinematic recitation video.
+Production-oriented pipeline that converts a manga PDF (or Webtoon episode URL) into a vertical cinematic recitation video.
 
-Detailed technical guide: see [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.md).
+Detailed technical guide: [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.md).
 
 ## Features
 
-- End-to-end flow: PDF -> pages -> panels -> OCR -> OpenAI script cleaning -> ElevenLabs TTS -> panel animation -> timeline -> subtitles -> final video.
-- Strict fail-fast provider policy: if OpenAI or ElevenLabs fails, job stops with structured error.
-- Vertical output (`1080x1920`) with Ken Burns style motion from original manga panels only.
-- Stage artifacts and job report under `outputs/runs/<run_key>/`.
+- End-to-end flow: PDF/Webtoon → panels → **OpenAI OCR** → **OpenAI script cleaning** → **ElevenLabs TTS only** → panel animation → timeline → subtitles → final video.
+- **Optional music bed** under narration: local files / `BGM_DEFAULT_PATH` (no ElevenLabs Music or Sound Generation APIs).
+- **Final video at 1× speed by default** (`VIDEO_PLAYBACK_SPEED`); video and narration stay in sync when you change speed.
+- **Disk use:** by default, per-panel `clips/` and `final/merged.mp4` + `concat.txt` are removed after a successful run (`RUN_KEEP_INTERMEDIATE_CLIPS=false`).
+- Strict fail-fast for required providers: OpenAI or ElevenLabs TTS failures stop the job with a structured error.
+- Vertical output (`1080×1920`) with Ken Burns–style motion from original panels.
+- Stage artifacts and `job_report.json` under `outputs/runs/<run_key>/`.
 - Webtoon runs use nested folders: `outputs/runs/<genre>/<title>/<episode>/`.
 
 ## Project Layout
@@ -31,13 +34,16 @@ manga_video_pipeline/
 ## Prerequisites
 
 - Python 3.10+
-- FFmpeg and FFprobe installed in PATH
-- Poppler installed (required by `pdf2image`)
-- OpenAI and ElevenLabs API keys
+- FFmpeg and FFprobe in `PATH`
+- Poppler (for `pdf2image`, PDF input only)
+- **OpenAI** API key (OCR + script cleaner)
+- **ElevenLabs** API key (**text-to-speech only**)
 
 ## Environment
 
-Create `.env` in repo root:
+Create `.env` in the **repo root** or under `manga_video_pipeline/` (both are loaded).
+
+**Required for real runs:**
 
 ```env
 OPENAI_API_KEY=your_openai_key
@@ -45,13 +51,38 @@ ELEVENLABS_API_KEY=your_elevenlabs_key
 LOG_LEVEL=INFO
 ```
 
-Optional knobs:
+**Common optional knobs:**
 
 ```env
+# Video
+VIDEO_PLAYBACK_SPEED=1.0
+RUN_KEEP_INTERMEDIATE_CLIPS=false
+
+# BGM in final mux (see DETAILED_DOCUMENTATION for dedupe with narration bed)
+BGM_DEFAULT_PATH=/absolute/path/to/bed.mp3
+BGM_VOLUME=0.14
+
+# Narration: optional instrumental bed (local files only)
+AUDIO_BED_IN_NARRATION=true
+AUDIO_USE_BGM_DEFAULT_AS_BED=true
+AUDIO_MUSIC_VOLUME=0.12
+# JSON map: emotion -> file path, e.g. {"fear":"/path/tense.mp3","neutral":"/path/soft.mp3"}
+AUDIO_MUSIC_LOCAL_MAP_JSON=
+
+# TTS grouping (disable for one API call per line)
+AUDIO_GROUPING_ENABLED=true
+AUDIO_STRICT_PER_LINE_TTS=false
+AUDIO_GROUP_MAX_CHARS=220
+
+# Per-speaker ElevenLabs voice IDs (JSON)
+ELEVENLABS_VOICE_MAP_JSON=
+
+# Pipeline
 MAX_PAGES=80
 MIN_VIDEO_DURATION_SEC=30
 MAX_VIDEO_DURATION_SEC=180
 ENABLE_SUBTITLES_DEFAULT=true
+ENABLE_CACHE=true
 ```
 
 ## Install
@@ -62,23 +93,27 @@ pip install -r manga_video_pipeline/requirements.txt
 
 ## Run API
 
+From the `manga_video_pipeline` directory (so `app` resolves):
+
 ```bash
-uvicorn app.main:app --reload --app-dir manga_video_pipeline
+cd manga_video_pipeline
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Or from the repo root:
+
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir manga_video_pipeline
 ```
 
 ## Operations UI
 
 - Open `http://127.0.0.1:8000/ops` for the operations dashboard.
-- Features:
-  - start generation jobs
-  - monitor recent runs
-  - inspect per-run reports and output artifacts
+- Start jobs, browse runs, inspect `job_report.json`, preview `video.mp4`.
 
 ## Generate Video
 
 `POST /generate`
-
-Request:
 
 ```json
 {
@@ -87,18 +122,11 @@ Request:
 }
 ```
 
-You can also pass a Webtoon episode URL in `pdf_path`:
+Webtoon episode URL in `pdf_path` is supported; the pipeline downloads ordered panel images and continues as with PDFs.
 
-```json
-{
-  "pdf_path": "https://www.webtoons.com/en/.../episode/viewer?title_no=123&episode_no=45",
-  "subtitles": true
-}
-```
+Optional request fields include `target_duration_sec`, `max_panels`, and `bgm_path` (overrides default BGM for the **final video mux** when set).
 
-For Webtoon URLs, the pipeline auto-downloads ordered panel images from `img._images[data-url]` and continues with OCR, narration, animation, and final assembly.
-
-Success response:
+**Success:**
 
 ```json
 {
@@ -107,7 +135,7 @@ Success response:
 }
 ```
 
-Fail response:
+**Failure:**
 
 ```json
 {
@@ -121,15 +149,12 @@ Fail response:
 
 ## Operational Notes
 
-- No default provider fallback is used.
-- If OpenAI or ElevenLabs errors, pipeline aborts immediately.
-- Each stage emits structured logs and timing data.
-- A `job_report.json` is generated per run for troubleshooting.
-- Ops API supports nested run keys (example: `romance/dirty-deeds/episode-1`) in run-detail routes.
-- Ops dashboard includes search/filter/pagination, deep-linking (`?run_id=...`), and inline final video preview.
+- No automatic fallback to a second TTS provider; ElevenLabs is the narration implementation.
+- Each stage logs timing; `meta/job_report.json` records stages (including `narration_music_source` when a bed was applied).
+- Ops API supports nested run keys (e.g. `romance/dirty-deeds/episode-1`).
 
 ## Testing
 
 ```bash
-pytest -q manga_video_pipeline/tests
+cd manga_video_pipeline && python3 -m pytest tests/ -q
 ```

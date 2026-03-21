@@ -8,7 +8,6 @@ from app.utils.ffmpeg_runner import run_ffmpeg
 
 
 def _escape_subtitles_path(path: Path) -> str:
-    # FFmpeg subtitles filter has its own parser; absolute paths should be quoted and escaped.
     value = path.as_posix()
     value = value.replace("\\", "\\\\")
     value = value.replace(":", "\\:")
@@ -23,7 +22,7 @@ def assemble_video(
     subtitles_path: Path | None = None,
     bgm_path: str | None = None,
 ) -> Path:
-    playback_speed = 1.25
+    playback_speed = max(0.25, min(4.0, float(settings.video_playback_speed)))
     list_file = output_path.parent / "concat.txt"
     list_file.write_text("\n".join([f"file '{c.resolve().as_posix()}'" for c in clips]), encoding="utf-8")
 
@@ -48,6 +47,17 @@ def assemble_video(
     ]
     run_ffmpeg(concat_cmd, stage="video_editor", timeout_sec=settings.stage_timeout_sec)
 
+    def _video_base_filter() -> str:
+        # Pad tail to reduce frame-quantization drift vs audio.
+        if abs(playback_speed - 1.0) < 1e-6:
+            return "[0:v]tpad=stop_mode=clone:stop_duration=8[vbase]"
+        return f"[0:v]tpad=stop_mode=clone:stop_duration=8,setpts=PTS/{playback_speed}[vbase]"
+
+    def _narration_audio_filter(narration_index: int) -> str:
+        if abs(playback_speed - 1.0) < 1e-6:
+            return f"[{narration_index}:a]anull[narr]"
+        return f"[{narration_index}:a]atempo={playback_speed},aresample=async=1:first_pts=0[narr]"
+
     def _build_final_cmd(try_burn_subtitles: bool) -> list[str]:
         local_inputs = ["-i", str(merged_video)]
         local_maps = ["-map", "[vout]"]
@@ -55,8 +65,7 @@ def assemble_video(
         audio_from_filter = False
         input_count = 1
 
-        # Pad tail to avoid accumulated frame-quantization drift causing audio overrun.
-        video_filter = f"[0:v]tpad=stop_mode=clone:stop_duration=8,setpts=PTS/{playback_speed}[vbase]"
+        video_filter = _video_base_filter()
         if try_burn_subtitles and subtitles_path and subtitles_path.exists():
             subtitles_filter = _escape_subtitles_path(subtitles_path)
             video_filter = f"{video_filter};[vbase]{subtitles_filter}[vout]"
@@ -71,19 +80,22 @@ def assemble_video(
         narration_index = input_count
         local_inputs.extend(["-i", str(narration_path)])
         input_count += 1
+        narr_f = _narration_audio_filter(narration_index)
+
         if bgm_path:
             bgm_index = input_count
             local_inputs.extend(["-i", bgm_path])
             input_count += 1
             filter_complex = (
                 f"{video_filter};"
-                f"[{narration_index}:a]volume=1.0[narr];"
+                f"{narr_f};"
                 f"[{bgm_index}:a]volume={settings.bgm_volume}[bgm];"
                 "[narr][bgm]amix=inputs=2:duration=first:dropout_transition=2[mix];"
-                f"[mix]atempo={playback_speed},aresample=async=1:first_pts=0[aout]"
+                "[mix]anull[aout]"
             )
         else:
-            filter_complex = f"{video_filter};[{narration_index}:a]atempo={playback_speed},aresample=async=1:first_pts=0[aout]"
+            filter_complex = f"{video_filter};{narr_f};[narr]anull[aout]"
+
         local_maps.extend(["-map", "[aout]"])
         audio_from_filter = True
 

@@ -17,8 +17,8 @@ def _tts_cache_key_for_line(text: str, line: ScriptLine, selected_voice: str, pr
     return hash_text(f"{provider}|{selected_voice}|{line.gender}|{line.emotion}|{text.strip().lower()}")
 
 
-def generate_voice(script: list[ScriptLine], audio_dir: Path) -> tuple[Path, list[AudioSegmentSchema]]:
+def generate_voice(script: list[ScriptLine], audio_dir: Path) -> tuple[Path, list[AudioSegmentSchema], dict]:
     if not script:
         raise ProviderError("narrator", "elevenlabs", "Script is empty before TTS call", "TTS_EMPTY_SCRIPT")
-    narration_path, segments, _timeline = run_audio_pipeline(script, audio_dir)
-    return narration_path, segments
+    narration_path, segments, _timeline, audio_meta = run_audio_pipeline(script, audio_dir)
+    return narration_path, segments, audio_meta

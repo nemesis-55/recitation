@@ -148,7 +148,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         with StageTimer(logger, "narrator"):
             stage_start = time.time()
             api_start = time.time()
-            narration_path, audio_segments = generate_voice(script, dirs["audio"])
+            narration_path, audio_segments, audio_meta = generate_voice(script, dirs["audio"])
             _enforce_stage_timeout("narrator", stage_start)
             report["stages"]["narrator"] = {
                 "segments": len(audio_segments),
@@ -156,6 +156,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 "provider_order": settings.tts_provider_order,
                 "elevenlabs_tts_model": settings.elevenlabs_tts_model,
                 "elapsed_ms": round((time.time() - api_start) * 1000),
+                **audio_meta,
             }
             report["artifacts"]["openai_narration"] = [
                 {
@@ -209,12 +210,20 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         with StageTimer(logger, "video_editor"):
             stage_start = time.time()
             final_path = dirs["final"] / "video.mp4"
+            video_bgm = payload.bgm_path or settings.bgm_default_path
+            # Avoid doubling the same default BGM (already mixed under narration when source is bgm_default).
+            if (
+                not payload.bgm_path
+                and audio_meta.get("narration_music_source") == "bgm_default"
+                and settings.audio_bed_in_narration
+            ):
+                video_bgm = None
             final_video = assemble_video(
                 clips=clips,
                 narration_path=narration_path,
                 output_path=final_path,
                 subtitles_path=subtitles_path,
-                bgm_path=payload.bgm_path or settings.bgm_default_path,
+                bgm_path=video_bgm,
             )
             _enforce_stage_timeout("video_editor", stage_start)
             report["stages"]["video_editor"] = {"video_path": str(final_video)}
@@ -224,6 +233,20 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             qc = check_video(final_video)
             _enforce_stage_timeout("quality_checker", stage_start)
             report["stages"]["quality_checker"] = qc.model_dump()
+
+        if not settings.run_keep_intermediate_clips:
+            for clip_path in clips:
+                try:
+                    clip_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            fin = dirs["final"]
+            for name in ("merged.mp4", "concat.txt"):
+                p = fin / name
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
         report["elapsed_sec"] = round(time.time() - start, 3)
         report_path = dirs["meta"] / "job_report.json"

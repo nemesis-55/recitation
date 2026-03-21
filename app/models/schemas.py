@@ -52,7 +52,7 @@ class ScriptLine(BaseModel):
     speaker: str = "unknown_1"
     gender: str = "unknown"
     emotion: str = "neutral"
-    emotion_intensity: float = 0.5
+    emotion_intensity: Optional[float] = None
     voice: Optional[str] = None
     rendered_text: Optional[str] = None
     pause_sec: Optional[float] = None

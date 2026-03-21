@@ -1,256 +1,263 @@
-# Manga Video Pipeline - Detailed Documentation
+# Manga Video Pipeline — Detailed Documentation
 
 ## Overview
 
-`manga_video_pipeline` converts manga sources into vertical recitation videos with subtitles.
+`manga_video_pipeline` turns manga sources into vertical recitation videos with optional subtitles.
 
-Supported input sources:
-- Local PDF path
-- Webtoon episode URL
+**Inputs**
 
-High-level output:
-- `video.mp4` (final recitation video)
-- `subtitles.srt` (subtitle file)
-- `job_report.json` (stage-level execution report)
+- Local PDF path  
+- Webtoon episode URL  
+
+**Main outputs**
+
+- `final/video.mp4` — final video  
+- `final/subtitles.srt` — when subtitles are enabled  
+- `meta/job_report.json` — per-stage report  
+- `meta/timeline.json`, `meta/audio_timeline.json` — timing metadata  
+- `audio/narration.mp3` — full narration mix (voice + optional bed + optional SFX/ambience)  
 
 ---
 
 ## End-to-End Flow
 
-1. `preflight`
-   - Validates required keys, provider config, and disk space.
-2. `pdf_loader` or `webtoon_loader`
-   - Loads source pages/panels depending on input type.
-3. `panel_extractor` (PDF only)
-   - Extracts panel images from page images.
-4. `ocr_engine`
-   - Uses OpenAI for OCR extraction from panel images.
-5. `script_cleaner`
-   - Converts noisy OCR text into structured dialogue metadata.
-6. `narrator`
-   - Synthesizes line-level TTS and merged narration audio.
-7. `timeline_builder`
-   - Builds panel timeline durations based on audio timing.
-8. `panel_animator`
-   - Creates animated per-panel clips.
-9. `subtitle_generator`
-   - Generates SRT from timeline narration.
-10. `video_editor`
-    - Concatenates clips, merges audio, applies speed/subtitles.
-11. `quality_checker`
-    - Confirms video/audio streams and quality gates.
+1. **preflight** — Keys, disk space, basic config.  
+2. **pdf_loader** or **webtoon_loader** — Pages or downloaded panels.  
+3. **panel_extractor** (PDF only) — Panel crops.  
+4. **ocr_engine** — OpenAI vision OCR per batch.  
+5. **script_cleaner** — OCR → structured `ScriptLine`s (OpenAI text).  
+6. **narrator** / **audio_pipeline** — Dialogue analysis, ElevenLabs TTS, optional **local** music bed, SFX/ambience, `narration.mp3`.  
+7. **timeline_builder** — Panel durations from audio.  
+8. **panel_animator** — `clip_*.mp4` per panel.  
+9. **subtitle_generator** — SRT from timeline.  
+10. **video_editor** — Concat clips, mux narration, optional **final BGM**, optional subtitle burn/embed, **`VIDEO_PLAYBACK_SPEED`**.  
+11. **quality_checker** — Stream checks, duration / A-V delta gates.  
+12. **Artifact cleanup** (default) — Deletes `clips/*.mp4`, `final/merged.mp4`, `final/concat.txt` when `RUN_KEEP_INTERMEDIATE_CLIPS=false` and the run succeeds.
 
 ---
 
 ## Source Types and Run Paths
 
-Runs are stored under:
-- `outputs/runs/<run_key>/`
+Runs live under:
 
-For Webtoon URLs, run keys are nested:
-- `outputs/runs/<genre>/<title>/<episode>/`
-- Example: `outputs/runs/romance/dirty-deeds/episode-1`
+`outputs/runs/<run_key>/`
 
-If a run key already exists, suffixes are appended:
-- `episode-1_2`, `episode-1_3`, etc.
+Webtoon URLs use nested keys:
+
+`outputs/runs/<genre>/<title>/<episode>/`  
+Example: `outputs/runs/romance/dirty-deeds/episode-1`
+
+If the key exists, suffixes are applied (`episode-1_2`, …).
 
 ---
 
 ## Run Folder Structure
 
-Typical run tree:
-
 ```text
 outputs/runs/<run_key>/
-  pages/        # PDF page images (if PDF input)
-  panels/       # Extracted/downloaded panel images
-  audio/        # line_*.mp3 + narration.mp3
-  clips/        # clip_*.mp4
-  final/        # video.mp4, subtitles.srt, merged.mp4, concat.txt
-  meta/         # timeline.json, job_report.json
+  pages/          # PDF page images (PDF only)
+  panels/         # Panel images
+  audio/          # group_*.mp3, pause_*.mp3, narration.mp3, concat lists, etc.
+  clips/          # clip_*.mp4 (removed after success if RUN_KEEP_INTERMEDIATE_CLIPS=false)
+  final/
+    video.mp4
+    subtitles.srt # optional
+    merged.mp4      # optional; removed after success when cleanup enabled
+    concat.txt      # optional; removed after success when cleanup enabled
+  meta/
+    timeline.json
+    audio_timeline.json
+    job_report.json
 ```
 
----
-
-## Dialogue and Metadata Model
-
-`script_cleaner` normalizes OCR into one structured line per OCR panel item.
-
-`ScriptLine` fields:
-- `panel_path`: source panel image path
-- `narration`: cleaned line text
-- `speaker`: one of `male_1`, `male_2`, `female_1`, `female_2`, `narrator`, `unknown_1`
-- `gender`: `male`, `female`, `unknown`
-- `emotion`: `angry`, `sad`, `fear`, `happy`, `neutral`
-- `voice`: selected TTS voice used for synthesis
-
-Normalization rules include:
-- Strict enum enforcement for `speaker`, `gender`, `emotion`
-- Order-preserving one-row-per-input behavior
-- Filler suppression for non-semantic vocalizations (for example repeated `huuu`/`haaa`)
+**Panels and `audio/` are kept** so you can re-run or debug timing/TTS without re-OCRing. Enable `RUN_KEEP_INTERMEDIATE_CLIPS=true` to retain all per-panel clips and concat intermediates.
 
 ---
 
-## Voice Acting Engine (Audio-First)
+## Dialogue Model (`ScriptLine`)
 
-The TTS layer supports dynamic per-line voice assignment and provider fallback:
-- Narrator lines use narrator voice
-- Gender-based assignment for male/female
-- Unknown-gender lines can alternate between male/female reciter voices
-- Emotion overrides can map specific emotions to preferred voices
-- Emotion intensity (`0..1`) is estimated from punctuation/casing patterns
-- Rendered speech text is produced before TTS (fear hesitation, sad trailing, angry emphasis)
-- Emotion-aware pause engine inserts per-line pacing and serializes audio timeline metadata
+Produced by **script_cleaner** (one line per OCR panel row, same order).
 
-Provider behavior:
-- Auto mode follows `TTS_PROVIDER_ORDER` (default `elevenlabs`)
-- `TTS_PROVIDER` is fixed to ElevenLabs for narration (`elevenlabs`)
-- Retry logic with provider timeout and retries
-- Binary audio cache reuse when enabled
+| Field | Notes |
+|--------|--------|
+| `panel_path` | Source panel image path |
+| `narration` | Text for TTS; merged from LLM + OCR so words are not dropped |
+| `speaker` | `male_1`, `male_2`, `female_1`, `female_2`, `narrator`, `unknown_1` |
+| `gender` | `male`, `female`, `unknown` |
+| `emotion` | `angry`, `sad`, `fear`, `happy`, `neutral` |
+| `emotion_intensity` | Optional `0..1`; if omitted, **dialogue_analyzer** estimates from text |
+| `voice`, `rendered_text`, `pause_sec`, `tts_provider` | Filled during audio pipeline |
 
-Important environment knobs:
-- `ELEVENLABS_API_KEY`
-- `ELEVENLABS_API_BASE_URL`
-- `ELEVENLABS_TTS_MODEL`
-- `ELEVENLABS_VOICE_MALE`
-- `ELEVENLABS_VOICE_FEMALE`
-- `ELEVENLABS_VOICE_UNKNOWN`
-- `ELEVENLABS_VOICE_NARRATOR`
-- `OPENAI_TTS_MODEL`
-- `OPENAI_TTS_VOICE`
-- `OPENAI_TTS_VOICE_MALE`
-- `OPENAI_TTS_VOICE_FEMALE`
-- `OPENAI_TTS_VOICE_UNKNOWN`
-- `OPENAI_TTS_VOICE_NARRATOR`
-- `OPENAI_TTS_EMOTION_OVERRIDES`
-- `TTS_PROVIDER`
-- `TTS_PROVIDER_ORDER`
+**Script cleaner behavior**
+
+- Strict enums for speaker / gender / emotion.  
+- **Preserves** gasps and short vocals (`huu`, `haa`, etc.); very stretched tokens are normalized (e.g. long `uuu` → `uu`) for cleaner TTS.  
+- **Merges** LLM output with OCR when the model under-generates, so OCR tokens are not lost.
+
+---
+
+## Audio Pipeline (ElevenLabs TTS only)
+
+**External APIs**
+
+- **OpenAI** — OCR + script cleaning (not TTS).  
+- **ElevenLabs** — **Text-to-speech only** (`generate_tts` / streaming). There is **no** ElevenLabs Music API or Sound Generation client in this repo.
+
+**Voice selection**
+
+- `narrator` → `ELEVENLABS_VOICE_NARRATOR`  
+- `gender` male/female → male/female defaults  
+- `unknown` → alternates male/female by line index  
+- Optional **`ELEVENLABS_VOICE_MAP_JSON`**: JSON object mapping `speaker` id → ElevenLabs voice id (overrides defaults for that speaker).
+
+**Grouping**
+
+- `AUDIO_GROUPING_ENABLED` — merge adjacent compatible lines into one TTS call (faster, fewer seams).  
+- `AUDIO_STRICT_PER_LINE_TTS=true` — one TTS call per line (ignores grouping).  
+- `AUDIO_GROUP_MAX_CHARS` — soft cap for merged text length.
+
+**Performance text**
+
+- **speech_renderer** adjusts punctuation/spacing from emotion + intensity (fear, sad, angry caps, etc.).  
+- **pause_engine** adds pauses after lines; clips respect `MIN_PANEL_DURATION_SEC` / `MAX_PANEL_DURATION_SEC`.
+
+**Narration music bed (local files only)**
+
+Controlled by:
+
+- `AUDIO_BED_IN_NARRATION` — master switch for mixing a bed **into** `narration.mp3`.  
+- `AUDIO_MUSIC_LOCAL_MAP_JSON` — JSON `emotion` → absolute or cwd-relative path to a loopable track (dominant emotion across lines picks the file).  
+- `AUDIO_USE_BGM_DEFAULT_AS_BED` — if no local-map hit, use `BGM_DEFAULT_PATH` as the bed **when** it exists.  
+- `AUDIO_MUSIC_VOLUME` — bed level vs voice (voice-led `amix`, `duration=first`).
+
+**Avoiding double BGM**
+
+If the narration bed came from **`bgm_default`** (not from `AUDIO_MUSIC_LOCAL_MAP_JSON`) and the HTTP request did **not** set `bgm_path`, the **final video mux skips** `BGM_DEFAULT_PATH` so the same file is not mixed twice. If you pass `bgm_path` on the request, final mux still applies it.
+
+**SFX and ambience**
+
+- Local files under `assets/sfx/` via **sfx_engine** (`pick_sfx`).  
+- Optional `AUDIO_AMBIENCE_PATH` loop mixed in **audio_mixer** after the voice (+bed) stem.
+
+**Relevant env vars**
+
+`ELEVENLABS_API_KEY`, `ELEVENLABS_API_BASE_URL`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_TTS_MODEL_FALLBACK`, `ELEVENLABS_OUTPUT_FORMAT`, `ELEVENLABS_VOICE_*`, `ELEVENLABS_VOICE_MAP_JSON`, `TTS_PROVIDER`, `TTS_PROVIDER_ORDER`, `AUDIO_*` and `BGM_*` as in `app/config.py`, `PROVIDER_TIMEOUT_SEC`, `PROVIDER_RETRIES`, `AUDIO_VOICE_FX_ENABLED`.
+
+---
+
+## Video Assembly
+
+- Clips are concatenated (silent video), then merged with **`audio/narration.mp3`** (encoded to AAC in the final container).  
+- **`VIDEO_PLAYBACK_SPEED`** (default `1.0`):  
+  - `1.0` — no `setpts` / `atempo` speed change on narration; minimal processing.  
+  - Other values — video `setpts` and narration `atempo` stay matched.  
+- Optional **final BGM** track: `bgm_path` on the request, else `BGM_DEFAULT_PATH`, with `BGM_VOLUME` and `amix` `duration=first` against narration.
 
 ---
 
 ## Sync Strategy
 
-Sync is enforced in multiple layers:
-
-1. Timeline uses audio duration as source-of-truth when segment audio exists.
-2. Panels with no text/audio get minimum hold duration to avoid fast visual skipping.
-3. Final assembly merges timeline-derived clips with narration, then applies shared speed factor.
-4. Quality check verifies streams, duration bounds, and A/V delta metric (`av_delta_sec`).
-
-If you observe drift:
-- Compare stream durations with `ffprobe`
-- Inspect `meta/timeline.json` and `audio/narration.mp3`
-- Rebuild final stage using existing run artifacts
+1. Timeline uses measured audio segment durations.  
+2. Empty narration panels get at least `MIN_PANEL_DURATION_SEC`.  
+3. Final mux uses `-shortest` so video does not run past the primary audio bus.  
+4. **quality_checker** reports `av_delta_sec` vs `AV_SYNC_MAX_DELTA_SEC`.
 
 ---
 
 ## Caching
 
-Cache root:
-- `outputs/cache/`
+Cache root: `outputs/cache/` (under pipeline `outputs/`).
 
-Namespaces used:
-- `ocr_engine` (panel OCR result cache)
-- `script_cleaner_chunks` (chunk-level dialogue cleaning cache)
-- `script_cleaner` (full cleaned script cache)
-- `tts_audio` (voice-aware binary TTS cache)
+Namespaces include:
 
-Disable cache:
-- `ENABLE_CACHE=false`
+- `ocr_engine`  
+- `script_cleaner_chunks`, `script_cleaner`  
+- `tts_audio` (when enabled in TTS layer)  
+
+Disable: `ENABLE_CACHE=false`.
 
 ---
 
 ## API Endpoints
 
-Core:
-- `POST /generate`
+- `POST /generate` — main job.  
+- Ops: `GET /ops`, `GET /ops/api/runs`, `GET /ops/api/runs/{run_path}`, `GET /ops/api/runs/{run_path}/video`, `POST /ops/api/generate`.  
 
-Ops:
-- `GET /ops`
-- `GET /ops/api/runs`
-- `GET /ops/api/runs/{run_path}`
-- `GET /ops/api/runs/{run_path}/video`
-- `POST /ops/api/generate`
-
-Notes:
-- `run_path` supports nested keys (`romance/dirty-deeds/episode-1`)
-- Ops UI supports run filtering, pagination, deep-linking (`?run_id=...`), and inline media preview
+`run_path` may be nested (URL-encoded slashes).
 
 ---
 
-## Key Environment Variables
+## Key Environment Variables (reference)
 
-Core:
-- `OPENAI_API_KEY`
-- `RUNWAY_API_KEY`
-- `ELEVENLABS_API_KEY`
-- `OPENAI_MODEL`
-- `OPENAI_TTS_MODEL`
-- `TTS_PROVIDER`
-- `PROVIDER_TIMEOUT_SEC`
-- `PROVIDER_RETRIES`
-- `AV_SYNC_MAX_DELTA_SEC`
+Aligned with `app/config.py` (see file for defaults):
 
-OCR:
-- `OPENAI_OCR_BATCH_SIZE`
-- `OPENAI_OCR_MAX_IMAGE_DIM`
-- `OPENAI_OCR_JPEG_QUALITY`
-- `OPENAI_OCR_RECOVERY_BATCHES`
+**Core:** `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `OPENAI_MODEL`, `LOG_LEVEL`, `APP_ENV`
 
-Pipeline behavior:
-- `MIN_PANEL_DURATION_SEC`
-- `MAX_PANEL_DURATION_SEC`
-- `MIN_VIDEO_DURATION_SEC`
-- `MAX_VIDEO_DURATION_SEC`
-- `ENABLE_SUBTITLES_DEFAULT`
-- `STAGE_TIMEOUT_SEC`
-- `ENABLE_CACHE`
+**Video / output:** `OUTPUT_ROOT`, `DEFAULT_FPS`, `TARGET_WIDTH`, `TARGET_HEIGHT`, `VIDEO_PLAYBACK_SPEED`, `RUN_KEEP_INTERMEDIATE_CLIPS`
+
+**PDF / panels:** `MAX_PAGES`, `MAX_PAGE_MEGAPIXELS`, `DEFAULT_DPI`, `MIN_FREE_DISK_MB`
+
+**Duration gates:** `MIN_PANEL_DURATION_SEC`, `MAX_PANEL_DURATION_SEC`, `MIN_VIDEO_DURATION_SEC`, `MAX_VIDEO_DURATION_SEC`
+
+**OCR:** `OPENAI_OCR_BATCH_SIZE`, `OPENAI_OCR_MAX_IMAGE_DIM`, `OPENAI_OCR_JPEG_QUALITY`, `OPENAI_OCR_RECOVERY_BATCHES`
+
+**Script cleaner:** `OPENAI_SCRIPT_BATCH_SIZE`, `OPENAI_SKIP_EMPTY_OCR_FOR_CLEANER`, `OPENAI_DEBUG_IO`
+
+**Subtitles:** `ENABLE_SUBTITLES_DEFAULT`, `SUBTITLE_STRICT_FROM_SCRIPT`
+
+**Audio / BGM:** `BGM_DEFAULT_PATH`, `BGM_VOLUME`, `AUDIO_BED_IN_NARRATION`, `AUDIO_MUSIC_LOCAL_MAP_JSON`, `AUDIO_MUSIC_VOLUME`, `AUDIO_USE_BGM_DEFAULT_AS_BED`, `AUDIO_AMBIENCE_PATH`, `AUDIO_AMBIENCE_VOLUME`, `AUDIO_SFX_VOLUME`, `AUDIO_VOICE_FX_ENABLED`, `AUDIO_GROUPING_ENABLED`, `AUDIO_STRICT_PER_LINE_TTS`, `AUDIO_GROUP_MAX_CHARS`, `ELEVENLABS_VOICE_MAP_JSON`, plus all `ELEVENLABS_*` TTS fields above
+
+**Reliability:** `STAGE_TIMEOUT_SEC`, `PROVIDER_TIMEOUT_SEC`, `PROVIDER_RETRIES`, `AV_SYNC_MAX_DELTA_SEC`, `ENABLE_CACHE`
 
 ---
 
-## Troubleshooting Guide
+## Troubleshooting
 
-### 1) Input Not Found
-- Error examples: `PDF_NOT_FOUND`, webtoon fetch/download errors
-- Check input path/URL and network access
+### Input / network
 
-### 2) Provider Failures
-- Error examples: `OPENAI_RATE_LIMITED`, `OPENAI_AUTH_FAILED`, `OPENAI_TTS_FAILED`
-- Verify API keys and reduce OCR batch size
-- Enable debug logs with `OPENAI_DEBUG_IO=true` for diagnosis
+- `PDF_NOT_FOUND`, Webtoon fetch errors → check path, URL, and network.
 
-### 3) Subtitle Burn Failure
-- If FFmpeg lacks subtitle filter support, fallback to embedded subtitle track is used
+### OpenAI
 
-### 4) Audio/Video Drift
-- Regenerate using existing run artifacts
-- Confirm both streams after final build:
-  - `ffprobe -show_entries stream=index,codec_type,duration`
+- Rate limits / auth → `OPENAI_RATE_LIMITED`, `OPENAI_AUTH_FAILED`; reduce batch sizes, verify key.  
+- `OPENAI_DEBUG_IO=true` logs request/response summaries for OCR/script stages.
 
-### 5) Unnatural Fillers in Narration
-- Check `script_cleaner` normalization and cached TTS lines
-- Clear `outputs/cache/tts_audio` for fresh synthesis
+### ElevenLabs TTS
+
+- Empty script → `TTS_EMPTY_SCRIPT`.  
+- Verify `ELEVENLABS_API_KEY` and voice IDs.
+
+### Subtitles
+
+- If FFmpeg has no `subtitles` filter, the pipeline falls back to a separate subtitle track.
+
+### A/V drift
+
+- Compare `ffprobe` on `video.mp4` streams vs `meta/timeline.json` / `audio/narration.mp3`.
+
+### Unwanted narration wording
+
+- Inspect cleaned script in `job_report.json` artifacts; clear `outputs/cache/script_cleaner*` (and full cache if needed) to invalidate.
+
+### Missing music bed
+
+- Ensure `AUDIO_BED_IN_NARRATION=true` and either a valid `AUDIO_MUSIC_LOCAL_MAP_JSON` entry for the dominant emotion or `BGM_DEFAULT_PATH` with `AUDIO_USE_BGM_DEFAULT_AS_BED=true`.
 
 ---
 
-## Testing and QA
-
-Run test suite:
+## Testing
 
 ```bash
-python3 -m pytest -q
+cd manga_video_pipeline
+python3 -m pytest tests/ -q
 ```
 
-Recommended smoke workflow:
-1. Run one short Webtoon generation (`max_panels` small).
-2. Inspect `meta/job_report.json`.
-3. Preview final video via Ops UI.
-4. Verify stream durations with `ffprobe`.
+Smoke: short run with small `max_panels`, then inspect `meta/job_report.json` and play `final/video.mp4`.
 
 ---
 
-## Security Notes
+## Security
 
-- Never commit real API keys in `.env`.
-- Rotate keys immediately if exposed.
-- Keep run artifacts out of public repos unless intentionally shared.
+- Do not commit real `.env` secrets.  
+- Rotate keys if exposed.  
+- Treat run folders as sensitive if they include copyrighted manga assets.

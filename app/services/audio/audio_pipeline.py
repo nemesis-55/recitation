@@ -7,6 +7,7 @@ from app.models.schemas import ScriptLine
 from app.services.audio.audio_mixer import mix_audio
 from app.services.audio.character_engine import get_voice
 from app.services.audio.dialogue_analyzer import analyze_dialogue
+from app.services.audio.music_engine import resolve_music_bed
 from app.services.audio.pause_engine import create_silence_clip, pause_seconds
 from app.services.audio.sfx_engine import pick_sfx
 from app.services.audio.speech_renderer import render_speech
@@ -18,13 +19,12 @@ from app.config import settings
 
 
 def _build_tts_groups(lines: list[ScriptLine]) -> list[list[int]]:
+    if settings.audio_strict_per_line_tts or not settings.audio_grouping_enabled:
+        return [[i] for i in range(len(lines))]
     groups: list[list[int]] = []
     for idx, line in enumerate(lines):
         text = (line.rendered_text or "").strip()
         if not text:
-            groups.append([idx])
-            continue
-        if not settings.audio_grouping_enabled:
             groups.append([idx])
             continue
         if not groups:
@@ -46,7 +46,9 @@ def _build_tts_groups(lines: list[ScriptLine]) -> list[list[int]]:
     return groups
 
 
-def run_audio_pipeline(script: list[ScriptLine], audio_dir: Path) -> tuple[Path, list[AudioSegmentSchema], list[dict]]:
+def run_audio_pipeline(
+    script: list[ScriptLine], audio_dir: Path
+) -> tuple[Path, list[AudioSegmentSchema], list[dict], dict]:
     analyzed = analyze_dialogue(script)
     events: list[AudioEvent] = []
     segments: list[AudioSegmentSchema] = []
@@ -122,6 +124,8 @@ def run_audio_pipeline(script: list[ScriptLine], audio_dir: Path) -> tuple[Path,
             voice_cursor += pause_dur
         cursor = voice_cursor
 
+    music_bed, music_src, music_reason = resolve_music_bed(analyzed, audio_dir)
     narration_path = audio_dir / "narration.mp3"
-    mix_audio(events=events, output_path=narration_path, work_dir=audio_dir)
-    return narration_path, segments, build_timeline(events)
+    mix_audio(events=events, output_path=narration_path, work_dir=audio_dir, music_path=music_bed)
+    audio_meta = {"narration_music_source": music_src, "narration_music_reason": music_reason}
+    return narration_path, segments, build_timeline(events), audio_meta
