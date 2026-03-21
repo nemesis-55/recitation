@@ -147,6 +147,9 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             report["artifacts"]["openai_narration"] = [
                 {
                     "panel_path": line.panel_path,
+                    "speaker": line.speaker,
+                    "gender": line.gender,
+                    "voice": line.voice,
                     "emotion": line.emotion,
                     "narration": line.narration,
                 }

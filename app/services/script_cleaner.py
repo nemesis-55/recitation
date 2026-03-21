@@ -106,14 +106,62 @@ def _to_payload(raw_text_list: list[OcrResult]) -> list[dict]:
     return [{"panel_path": item.panel_path, "text": item.text, "low_confidence": item.low_confidence} for item in raw_text_list]
 
 
+def _normalize_dialogue_text(text: str) -> str:
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    # Suppress repetitive non-semantic sigh/interjection-only outputs.
+    filler_patterns = [
+        r"^h+u+\.{0,3}$",
+        r"^h+a+\.{0,3}$",
+        r"^ah+h+\.{0,3}$",
+        r"^ha+h+\.{0,3}$",
+    ]
+    if any(re.match(pat, lowered) for pat in filler_patterns):
+        return ""
+    # Normalize over-elongated sighs without dropping meaningful words.
+    cleaned = re.sub(r"\b(h)(u)\2{2,}\b", r"\1u", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(h)(a)\2{2,}\b", r"\1a", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bha{2,}ppy\b", "happy", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _normalize_speaker_and_gender(speaker: str, gender: str) -> tuple[str, str]:
+    normalized_speaker = (speaker or "unknown_1").strip().lower()
+    allowed_speakers = {"male_1", "male_2", "female_1", "female_2", "narrator", "unknown_1"}
+    if normalized_speaker not in allowed_speakers:
+        normalized_speaker = "unknown_1"
+    normalized_gender = (gender or "unknown").strip().lower()
+    if normalized_gender not in {"male", "female", "unknown"}:
+        normalized_gender = "unknown"
+    # If model identifies a speaker class but misses gender, infer directly.
+    if normalized_speaker.startswith("male_"):
+        normalized_gender = "male"
+    elif normalized_speaker.startswith("female_"):
+        normalized_gender = "female"
+    elif normalized_speaker == "narrator" and normalized_gender == "unknown":
+        normalized_gender = "unknown"
+    return normalized_speaker, normalized_gender
+
+
 def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptLine]:
     payload = [{"panel_path": item.panel_path, "text": item.text, "low_confidence": item.low_confidence} for item in raw_text_list]
 
     prompt = (
-        "You are cleaning manga OCR into narration lines.\n"
-        "Rules: preserve meaning/emotion, remove OCR garbage, keep lines concise and natural.\n"
-        "Output strict JSON array with fields: panel_path, narration, emotion.\n"
-        f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+        "You are an expert dialogue analyst for manga and comics.\n"
+        "Convert raw OCR lines into structured dialogue JSON.\n"
+        "Return ONLY a valid JSON array of objects with keys exactly:\n"
+        'text, speaker, gender, emotion\n'
+        "speaker should be one of male_1/male_2/female_1/female_2/narrator/unknown_1.\n"
+        "gender should be male/female/unknown.\n"
+        "emotion should be angry/sad/fear/happy/neutral.\n"
+        "Fix OCR errors and punctuation but keep original meaning.\n"
+        "Avoid adding filler interjections like 'huuu', 'haa', or repeated sighs unless essential.\n"
+        "Keep same speaker ID consistent within the provided sequence.\n"
+        "Keep order exactly matching input items. One output object per input item.\n"
+        "If text is unreadable or empty, return empty string for text, speaker unknown_1, gender unknown, emotion neutral.\n"
+        f"Input OCR items:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     request_payload = {
         "model": settings.openai_model,
@@ -158,13 +206,28 @@ def _clean_chunk(client: OpenAI, raw_text_list: list[OcrResult]) -> list[ScriptL
         raise ProviderError("script_cleaner", "openai", "OpenAI returned non-list output", "OPENAI_INVALID_OUTPUT")
 
     result: list[ScriptLine] = []
-    for idx, item in enumerate(data):
+    normalized: list[dict] = [item for item in data if isinstance(item, dict)]
+    if len(normalized) < len(raw_text_list):
+        normalized.extend([{"text": "", "speaker": "unknown_1", "gender": "unknown", "emotion": "neutral"}] * (len(raw_text_list) - len(normalized)))
+    if len(normalized) > len(raw_text_list):
+        normalized = normalized[: len(raw_text_list)]
+
+    for idx, item in enumerate(normalized):
         try:
+            emotion = str(item.get("emotion", "neutral")).strip().lower()
+            if emotion not in {"angry", "sad", "fear", "happy", "neutral"}:
+                emotion = "neutral"
+            speaker, gender = _normalize_speaker_and_gender(
+                speaker=str(item.get("speaker", "unknown_1")),
+                gender=str(item.get("gender", "unknown")),
+            )
             result.append(
                 ScriptLine(
-                    panel_path=item["panel_path"],
-                    narration=item["narration"].strip(),
-                    emotion=item.get("emotion", "neutral"),
+                    panel_path=raw_text_list[idx].panel_path,
+                    narration=_normalize_dialogue_text(str(item.get("text", "")).strip()),
+                    speaker=speaker,
+                    gender=gender,
+                    emotion=emotion,
                 )
             )
         except Exception as exc:

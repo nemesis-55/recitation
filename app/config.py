@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
     openai_tts_model: str = Field(default="gpt-4o-mini-tts", alias="OPENAI_TTS_MODEL")
     openai_tts_voice: str = Field(default="alloy", alias="OPENAI_TTS_VOICE")
+    openai_tts_voice_male: str = Field(default="alloy", alias="OPENAI_TTS_VOICE_MALE")
+    openai_tts_voice_female: str = Field(default="nova", alias="OPENAI_TTS_VOICE_FEMALE")
+    openai_tts_voice_unknown: str = Field(default="echo", alias="OPENAI_TTS_VOICE_UNKNOWN")
+    openai_tts_voice_narrator: str = Field(default="onyx", alias="OPENAI_TTS_VOICE_NARRATOR")
+    openai_tts_emotion_overrides: str = Field(
+        default="angry:shimmer,sad:echo,fear:ash,happy:nova,neutral:onyx",
+        alias="OPENAI_TTS_EMOTION_OVERRIDES",
+    )
     runway_api_base_url: str = Field(default="https://api.dev.runwayml.com", alias="RUNWAY_API_BASE_URL")
     video_gen_provider: str = Field(default="runway", alias="VIDEO_GEN_PROVIDER")
     tts_provider: str = Field(default="auto", alias="TTS_PROVIDER")

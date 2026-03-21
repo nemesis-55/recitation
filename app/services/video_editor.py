@@ -37,8 +37,13 @@ def assemble_video(
         "0",
         "-i",
         str(list_file),
-        "-c",
-        "copy",
+        "-an",
+        "-r",
+        str(settings.default_fps),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
         str(merged_video),
     ]
     run_ffmpeg(concat_cmd, stage="video_editor", timeout_sec=settings.stage_timeout_sec)
@@ -50,7 +55,8 @@ def assemble_video(
         audio_from_filter = False
         input_count = 1
 
-        video_filter = f"[0:v]setpts=PTS/{playback_speed}[vbase]"
+        # Pad tail to avoid accumulated frame-quantization drift causing audio overrun.
+        video_filter = f"[0:v]tpad=stop_mode=clone:stop_duration=8,setpts=PTS/{playback_speed}[vbase]"
         if try_burn_subtitles and subtitles_path and subtitles_path.exists():
             subtitles_filter = _escape_subtitles_path(subtitles_path)
             video_filter = f"{video_filter};[vbase]{subtitles_filter}[vout]"

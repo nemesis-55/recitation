@@ -49,7 +49,10 @@ class OcrResult(BaseModel):
 class ScriptLine(BaseModel):
     panel_path: str
     narration: str
+    speaker: str = "unknown_1"
+    gender: str = "unknown"
     emotion: str = "neutral"
+    voice: Optional[str] = None
 
 
 class AudioSegment(BaseModel):

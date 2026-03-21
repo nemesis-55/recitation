@@ -216,6 +216,7 @@
               <span class="badge">${idx + 1}</span>
               <span class="emotion">${emotion}</span>
             </header>
+            <small>speaker: ${line.speaker || "unknown_1"} | gender: ${line.gender || "unknown"} | voice: ${line.voice || "-"}</small>
             <p>${line.narration || ""}</p>
             <small title="${line.panel_path || ""}">${line.panel_path || ""}</small>
           `;

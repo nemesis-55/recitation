@@ -3,7 +3,7 @@
     "pdf_path": "https://www.webtoons.com/en/romance/dirty-deeds/episode-1/viewer?title_no=8808&episode_no=1",
     "subtitles": true,
     "target_duration_sec": null,
-    "max_panels": 10,
+    "max_panels": 20,
     "bgm_path": null
   },
   "stages": {
@@ -15,60 +15,58 @@
       "source": "webtoon_url"
     },
     "panel_limit": {
-      "requested_max_panels": 10,
+      "requested_max_panels": 20,
       "original_panels": 115,
-      "selected_panels": 10
+      "selected_panels": 20
     },
     "panel_qa": {
-      "count": 10,
+      "count": 20,
       "missing_count": 0,
       "unreadable_count": 0,
-      "total_bytes": 435180,
+      "total_bytes": 1333087,
       "missing_examples": [],
       "unreadable_examples": []
     },
     "ocr_engine": {
-      "items": 10,
+      "items": 20,
       "model": "gpt-4o-mini",
-      "elapsed_ms": 17937
+      "elapsed_ms": 42508
     },
     "script_cleaner": {
-      "lines": 10,
+      "lines": 20,
       "provider": "openai",
       "model": "gpt-4o-mini",
-      "elapsed_ms": 8480
+      "elapsed_ms": 13696
     },
     "narrator": {
-      "segments": 9,
+      "segments": 13,
       "provider": "auto",
       "openai_tts_model": "gpt-4o-mini-tts",
-      "elapsed_ms": 11797
+      "elapsed_ms": 19638
     },
     "timeline_builder": {
-      "entries": 10
+      "entries": 20
     },
     "panel_animator": {
-      "clips": 10
+      "clips": 20
     },
     "subtitle_generator": {
-      "entries": 9
+      "entries": 13
     },
     "video_editor": {
       "video_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/final/video.mp4"
     },
     "quality_checker": {
       "ok": true,
-      "duration_sec": 23.366667,
+      "duration_sec": 37.766667,
       "has_audio": true,
       "has_video": true,
       "checks": {
-        "duration_within_bounds": false,
+        "duration_within_bounds": true,
         "video_stream_present": true,
         "audio_stream_present": true
       },
-      "warnings": [
-        "Duration out of bounds: 23.37s"
-      ]
+      "warnings": []
     }
   },
   "warnings": [],
@@ -76,55 +74,165 @@
     "openai_narration": [
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0001.jpg",
-        "emotion": "ominous",
+        "speaker": "narrator",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
         "narration": "WARNING"
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0002.jpg",
-        "emotion": "frustration",
-        "narration": "It felt so unfair."
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "angry",
+        "narration": "IT FELT SO UNFAIR."
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0003.jpg",
-        "emotion": "despair",
-        "narration": "One fleeting moment, and misfortune swallowed me whole."
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "sad",
+        "narration": "ONE FLEETING MOMENT, AND MISFORTUNE SWALLOWED ME WHOLE."
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0004.jpg",
-        "emotion": "hopelessness",
-        "narration": "Yet, again and again..."
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "sad",
+        "narration": "YET, AGAIN AND AGAIN..."
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0005.jpg",
-        "emotion": "",
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
         "narration": ""
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0006.jpg",
-        "emotion": "exhaustion",
-        "narration": "Huu."
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0007.jpg",
-        "emotion": "sorrow",
-        "narration": "...I'm made to feel as if I was born only to suffer."
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "sad",
+        "narration": "...I'M MADE TO FEEL AS IF I WAS BORN ONLY TO SUFFER."
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0008.jpg",
-        "emotion": "exhaustion",
-        "narration": "Haa..."
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0009.jpg",
-        "emotion": "exhaustion",
-        "narration": "Haa..."
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
       },
       {
         "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0010.jpg",
-        "emotion": "melancholy",
-        "narration": "...The wind stirs..."
+        "speaker": "narrator",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "...THE WIND STIRS..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0011.jpg",
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0012.jpg",
+        "speaker": "narrator",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "...THE FLOWERS BLOOM..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0013.jpg",
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0014.jpg",
+        "speaker": "narrator",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "MIGHT BE NOTHING MORE THAN RUINS."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0015.jpg",
+        "speaker": "narrator",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "Dirty Deeds"
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0016.jpg",
+        "speaker": "unknown_1",
+        "gender": "unknown",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": ""
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0017.jpg",
+        "speaker": "male_1",
+        "gender": "male",
+        "voice": null,
+        "emotion": "angry",
+        "narration": "MAKE SURE EVERYTHING'S READY."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0018.jpg",
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "DING-A-LING"
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0019.jpg",
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "neutral",
+        "narration": "MS. CHEON'S USUALLY THE ONE TENDING YEONGHWADANG..."
+      },
+      {
+        "panel_path": "/Users/nemesis/Desktop/project/manga_recitation/manga_video_pipeline/outputs/runs/romance/dirty-deeds/episode-1/panels/webtoon_panel_0020.jpg",
+        "speaker": "female_1",
+        "gender": "female",
+        "voice": null,
+        "emotion": "sad",
+        "narration": "WHO'D HAVE THOUGHT SHE WOULD FALL SICK TODAY OF ALL DAYS?"
       }
     ]
   },
-  "elapsed_sec": 50.651
+  "elapsed_sec": 107.599
 }

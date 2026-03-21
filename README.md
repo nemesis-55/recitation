@@ -2,6 +2,8 @@
 
 Production-oriented pipeline that converts a manga PDF into a vertical cinematic recitation video.
 
+Detailed technical guide: see [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.md).
+
 ## Features
 
 - End-to-end flow: PDF -> pages -> panels -> OCR -> OpenAI script cleaning -> Runway TTS -> panel animation -> timeline -> subtitles -> final video.

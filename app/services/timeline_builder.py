@@ -36,7 +36,8 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
             # When audio exists, use it as source-of-truth for panel duration.
             dur = max(0.1, seg.duration_sec)
         else:
-            dur = settings.min_panel_duration_sec
+            # Keep textless/unvoiced panels visible long enough; do not skip too fast.
+            dur = max(settings.min_panel_duration_sec, 2.0)
         start = cursor
         end = start + dur
         out.append(
