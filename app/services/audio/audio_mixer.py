@@ -69,43 +69,54 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
         music_refs.append(ref)
         input_idx += 1
 
-    fg_refs = voice_refs + sfx_refs
-    if len(fg_refs) == 1:
-        filters.append(f"{fg_refs[0]}anull[fg]")
+    if len(voice_refs) == 1:
+        filters.append(f"{voice_refs[0]}anull[voice_bus]")
+    elif len(voice_refs) > 1:
+        filters.append(f"{''.join(voice_refs)}amix=inputs={len(voice_refs)}:duration=longest:normalize=0[voice_bus]")
     else:
-        filters.append(f"{''.join(fg_refs)}amix=inputs={len(fg_refs)}:duration=longest:normalize=0[fg]")
+        filters.append(f"anullsrc=r=44100:cl=mono,atrim=0:{target_duration_sec:.3f}[voice_bus]")
+    filters.append("[voice_bus]acompressor=threshold=-18dB:ratio=2:attack=5:release=50[comp]")
+    if settings.audio_mixer_use_loudnorm:
+        filters.append("[comp]loudnorm=I=-16:TP=-1.5:LRA=11[voice_out]")
+    else:
+        filters.append("[comp]dynaudnorm=f=250:g=15[voice_out]")
 
-    if music_refs:
-        if len(music_refs) == 1:
-            filters.append(f"{music_refs[0]}anull[music]")
-        else:
-            filters.append(
-                f"{''.join(music_refs)}amix=inputs={len(music_refs)}:duration=longest:normalize=0[music]"
-            )
-        if settings.audio_mixer_ducking_enabled:
-            filters.append("[fg]asplit=2[fg_main][fg_side]")
-            filters.append(
-                "[music][fg_side]sidechaincompress="
-                f"threshold={settings.audio_mixer_ducking_threshold}:"
-                f"ratio={settings.audio_mixer_ducking_ratio}:"
-                f"attack={settings.audio_mixer_ducking_attack_ms}:"
-                f"release={settings.audio_mixer_ducking_release_ms}"
-                "[ducked]"
-            )
-            filters.append("[fg_main][ducked]amix=inputs=2:duration=first:normalize=0[preout]")
-        else:
-            filters.append("[fg][music]amix=inputs=2:duration=first:normalize=0[preout]")
+    if len(sfx_refs) == 1:
+        filters.append(f"{sfx_refs[0]}anull[sfx_bus]")
+    elif len(sfx_refs) > 1:
+        filters.append(f"{''.join(sfx_refs)}amix=inputs={len(sfx_refs)}:duration=longest:normalize=0[sfx_bus]")
     else:
-        filters.append("[fg]anull[preout]")
+        filters.append(f"anullsrc=r=44100:cl=mono,atrim=0:{target_duration_sec:.3f}[sfx_bus]")
+    sfx_gain = max(0.2, min(1.0, float(settings.audio_mixer_sfx_gain or 0.6)))
+    filters.append(f"[sfx_bus]volume={sfx_gain:.3f}[sfx_out]")
+
+    if len(music_refs) == 1:
+        filters.append(f"{music_refs[0]}anull[music_bus]")
+    elif len(music_refs) > 1:
+        filters.append(f"{''.join(music_refs)}amix=inputs={len(music_refs)}:duration=longest:normalize=0[music_bus]")
+    else:
+        filters.append(f"anullsrc=r=44100:cl=mono,atrim=0:{target_duration_sec:.3f}[music_bus]")
+    music_gain = max(0.05, min(0.3, float(settings.audio_mixer_music_gain or 0.18)))
+    filters.append(f"[music_bus]volume={music_gain:.3f}[music_out]")
+
+    if settings.audio_mixer_ducking_enabled:
+        filters.append(
+            "[music_out][voice_out]sidechaincompress="
+            f"threshold={settings.audio_mixer_ducking_threshold}:"
+            f"ratio={settings.audio_mixer_ducking_ratio}:"
+            f"attack={settings.audio_mixer_ducking_attack_ms}:"
+            f"release={settings.audio_mixer_ducking_release_ms}"
+            "[music_ducked]"
+        )
+        filters.append("[voice_out][music_ducked][sfx_out]amix=inputs=3:duration=first:normalize=0[preout]")
+    else:
+        filters.append("[voice_out][music_out][sfx_out]amix=inputs=3:duration=first:normalize=0[preout]")
 
     hp = max(20, int(settings.audio_mixer_highpass_hz))
     lp = max(hp + 1000, int(settings.audio_mixer_lowpass_hz))
     filters.append(f"[preout]atrim=0:{target_duration_sec:.3f},asetpts=N/SR/TB,highpass=f={hp},lowpass=f={lp}[shaped]")
     if settings.audio_mixer_normalize_loudness:
-        if settings.audio_mixer_use_loudnorm:
-            filters.append("[shaped]loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.95[aout]")
-        else:
-            filters.append("[shaped]dynaudnorm=f=250:g=15,alimiter=limit=0.95[aout]")
+        filters.append("[shaped]loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.95[aout]")
     else:
         filters.append("[shaped]alimiter=limit=0.95[aout]")
 

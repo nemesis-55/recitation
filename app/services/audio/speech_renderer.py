@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.audio.speech_dynamics_engine import apply_speech_dynamics
+
 
 _SCENE_BRIDGES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bservant[s]?\b", re.IGNORECASE), "Servants move in the background with quiet urgency."),
@@ -108,6 +110,7 @@ def render_speech(text: str, emotion: str, intensity: float, speech_mode: str = 
     cleaned = cleaned.replace("/", ", ")
     cleaned = re.sub(r"[~*_`]+", "", cleaned)
     cleaned = _apply_speech_mode(cleaned, speech_mode)
+    cleaned = apply_speech_dynamics(cleaned, emotion, intensity)
     lowered = cleaned.lower()
     # Keep exertion vocals instead of skipping them.
     if re.match(r"^h+u+$", lowered) or re.match(r"^h+a+$", lowered):

@@ -2,10 +2,11 @@
 
 ## Overview
 
-The runtime is now **OCR-timeline driven** for public API calls. Dialogue timing is derived from extracted panel text.
+The runtime is **SRT-first with OCR fallback**. Dialogue timing uses provided SRT when available, otherwise OCR-derived timeline.
 
 Inputs:
 - `pdf_path` (or webtoon URL)
+- optional `srt_path`
 
 Outputs:
 - `final/video.mp4`
@@ -17,7 +18,7 @@ Outputs:
 1. `preflight`
 2. `pdf_loader` / `webtoon_loader`
 3. `panel_extractor` (PDF only)
-4. `srt_loader` (auto-generates timeline from OCR)
+4. `srt_loader` (uses provided SRT or auto-generates timeline from OCR)
 5. `narrator`:
    - `dialogue_analyzer.analyze_srt_timeline` (OpenAI)
    - `speech_renderer.render_speech` (deterministic)

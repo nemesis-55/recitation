@@ -63,6 +63,24 @@ def test_resolve_music_bed_when_elevenlabs_music_disabled(monkeypatch, tmp_path:
     assert reason == "elevenlabs_music_disabled"
 
 
+def test_resolve_music_bed_prefers_rule_music_type(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(app_settings, "audio_bed_in_narration", True)
+    monkeypatch.setattr(app_settings, "elevenlabs_music_enabled", True)
+    captured = {"prompt": ""}
+
+    def _fake_generate_scene_music(prompt: str, duration_ms: int, output_path: Path):
+        _ = duration_ms
+        captured["prompt"] = prompt
+        output_path.write_bytes(b"music")
+
+    monkeypatch.setattr("app.services.audio.music_engine.generate_scene_music", _fake_generate_scene_music)
+    lines = [ScriptLine(panel_path="p", narration="soft line", emotion="neutral")]
+    path, src, reason = resolve_music_bed(lines, tmp_path, music_type_override="intense")
+    assert path is not None and path.exists()
+    assert src == "elevenlabs" and reason == ""
+    assert "aggressive strings" in captured["prompt"].lower() or "action tension" in captured["prompt"].lower()
+
+
 def test_voice_map_override(monkeypatch):
     monkeypatch.setattr(app_settings, "elevenlabs_voice_map_json", '{"male_1": "voice_override_123"}')
     line = ScriptLine(panel_path="p", narration="hi", speaker="male_1", gender="male", emotion="neutral")

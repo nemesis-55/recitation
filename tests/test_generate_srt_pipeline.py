@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.schemas import AudioSegment, OcrResult, PageAsset, PanelAsset, QualityReport, TimelineEntry
+from app.models.schemas import AudioSegment, OcrResult, PageAsset, PanelAsset, QualityReport, SrtTimelineLine, TimelineEntry
 from app.routes.generate import _build_srt_lines_from_ocr
 
 
@@ -230,3 +230,70 @@ def test_build_srt_lines_from_ocr_uses_empty_for_low_confidence():
     lines = _build_srt_lines_from_ocr(items, fallback_duration=1.5)
     assert lines[0].text == ""
     assert lines[1].text == "HELLO"
+
+
+def test_generate_pipeline_prefers_provided_srt(monkeypatch, tmp_path: Path):
+    panel_img = tmp_path / "panel.jpg"
+    panel_img.write_bytes(b"panel")
+    dirs = {
+        "root": tmp_path / "run3",
+        "pages": tmp_path / "run3" / "pages",
+        "panels": tmp_path / "run3" / "panels",
+        "audio": tmp_path / "run3" / "audio",
+        "clips": tmp_path / "run3" / "clips",
+        "final": tmp_path / "run3" / "final",
+        "meta": tmp_path / "run3" / "meta",
+    }
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("app.routes.generate.run_preflight", lambda _source: None)
+    monkeypatch.setattr("app.routes.generate.is_webtoon_url", lambda _x: False)
+    monkeypatch.setattr(
+        "app.routes.generate.load_pdf",
+        lambda _src, _pages_dir: [PageAsset(page_index=0, image_path=str(tmp_path / "page.jpg"), width=100, height=100)],
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.extract_panels",
+        lambda _page, _panels_dir: [PanelAsset(page_index=0, panel_index=0, image_path=str(panel_img), bbox=(0, 0, 1, 1), confidence=1.0)],
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.extract_text_batch",
+        lambda _panels: (_ for _ in ()).throw(AssertionError("OCR should not run when srt_path is provided")),
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.load_srt_timeline",
+        lambda _path: [SrtTimelineLine(index=1, start_sec=0.0, end_sec=1.0, text="from srt")],
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.generate_voice",
+        lambda _srt, _panel_paths, audio_dir: (
+            (audio_dir / "narration.mp3").write_bytes(b"a") or (audio_dir / "narration.mp3"),
+            [AudioSegment(line_index=0, audio_path=str(audio_dir / "narration.mp3"), start_sec=0.0, end_sec=1.0, duration_sec=1.0)],
+            [{"type": "voice", "file": str(audio_dir / "narration.mp3"), "start": 0.0, "duration": 1.0, "line_index": 0}],
+            {"quality": "cinematic", "narration_music_source": "none", "narration_music_reason": "disabled"},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.build_timeline",
+        lambda panels, script_lines, audio: [
+            TimelineEntry(panel_path=panels[0].image_path, narration=script_lines[0].narration, start_sec=0.0, end_sec=1.0, duration_sec=1.0)
+        ],
+    )
+    monkeypatch.setattr("app.routes.generate.animate_panel", lambda _panel_path, _duration, out_clip: out_clip.write_bytes(b"clip"))
+    monkeypatch.setattr(
+        "app.routes.generate.assemble_video",
+        lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None: (output_path.write_bytes(b"video"), output_path)[1],
+    )
+    monkeypatch.setattr(
+        "app.routes.generate.check_video",
+        lambda _video_path: QualityReport(
+            ok=True, duration_sec=1.0, has_audio=True, has_video=True, av_delta_sec=0.0, checks={"ok": True}, warnings=[]
+        ),
+    )
+    monkeypatch.setattr("app.routes.generate.create_run_dirs", lambda job_id=None: dirs)
+
+    client = TestClient(app)
+    res = client.post("/generate", json={"pdf_path": "/tmp/in.pdf", "srt_path": "/tmp/in.srt"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "completed"

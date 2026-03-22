@@ -34,6 +34,14 @@ _EMOTION_LABELS: dict[str, str] = {
     "neutral": "Soft neo-classical ambient underscore with airy pads and light strings, no vocals, loopable",
 }
 
+_MUSIC_TYPE_TO_EMOTION: dict[str, str] = {
+    "intense": "angry",
+    "tension": "fear",
+    "piano": "sad",
+    "ambient": "neutral",
+    "uplift": "happy",
+}
+
 
 def estimate_script_narration_duration_sec(lines: list[ScriptLine]) -> float:
     total = 0.0
@@ -49,7 +57,9 @@ def estimate_script_narration_duration_sec(lines: list[ScriptLine]) -> float:
     return max(5.0, total)
 
 
-def resolve_music_bed(lines: list[ScriptLine], audio_dir: Path) -> tuple[Path | None, str, str]:
+def resolve_music_bed(
+    lines: list[ScriptLine], audio_dir: Path, music_type_override: str | None = None
+) -> tuple[Path | None, str, str]:
     """
     Returns (path_or_none, source, reason) where source is elevenlabs or none.
     """
@@ -58,7 +68,8 @@ def resolve_music_bed(lines: list[ScriptLine], audio_dir: Path) -> tuple[Path | 
     if not settings.elevenlabs_music_enabled:
         return None, "none", "elevenlabs_music_disabled"
 
-    emotion = _dominant_emotion(lines)
+    override = (music_type_override or "").strip().lower()
+    emotion = _MUSIC_TYPE_TO_EMOTION.get(override) or _dominant_emotion(lines)
     duration_ms = int(max(3000, min(600000, estimate_script_narration_duration_sec(lines) * 1000)))
     prompt = music_prompt_for_emotion(emotion)
     out = audio_dir / "music_scene.mp3"

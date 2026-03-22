@@ -6,7 +6,7 @@ Detailed technical guide: [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.m
 
 ## What It Does
 
-- Input: manga source (`pdf_path` or webtoon URL). Timeline is auto-generated from OCR.
+- Input: manga source (`pdf_path` or webtoon URL). Optional `srt_path` can be provided as master timeline; otherwise timeline is auto-generated from OCR.
 - Audio flow: SRT -> OpenAI dialogue analysis -> deterministic speech rendering -> ElevenLabs TTS per line -> ElevenLabs SFX -> ElevenLabs scene music -> cinematic FFmpeg mix.
 - Video flow: panels are animated using SRT durations, then muxed with narration and subtitles.
 - Provider failures are **fatal** (no local fallback for ElevenLabs SFX/Music/TTS).
@@ -116,7 +116,8 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir manga_video
 
 ```json
 {
-  "pdf_path": "/absolute/path/to/manga.pdf"
+  "pdf_path": "/absolute/path/to/manga.pdf",
+  "srt_path": "/absolute/path/to/subtitles.srt"
 }
 ```
 
@@ -147,7 +148,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir manga_video
 - `script_cleaner` has been removed from runtime; OCR-derived timeline drives narration timing.
 - ElevenLabs SFX/Music/TTS failures are surfaced as provider errors and stop the run.
 - `meta/job_report.json` includes `srt_analysis` and `audio_event_timeline`.
-- OCR timeline generation is always enabled (no `srt_path` request field).
+- OCR timeline generation is enabled by default; `srt_path` is optional.
 
 ## Webtoon Catalog + Episode Range
 

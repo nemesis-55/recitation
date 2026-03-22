@@ -5,13 +5,26 @@ from pathlib import Path
 from app.utils.ffmpeg_runner import run_ffmpeg
 
 
+def micro_pause_seconds(emotion: str, intensity: float) -> float:
+    emo = (emotion or "neutral").lower()
+    t = max(0.0, min(1.0, float(intensity)))
+    if emo == "fear":
+        return round(0.22 + (0.18 * t), 3)
+    if emo == "sad":
+        return round(0.2 + (0.16 * t), 3)
+    if emo == "angry":
+        return round(0.1 + (0.06 * (1.0 - t)), 3)
+    return round(0.12 + (0.1 * t), 3)
+
+
 def pause_seconds(emotion: str, intensity: float) -> float:
-    base = {"angry": 0.2, "neutral": 0.3, "happy": 0.28, "sad": 0.6, "fear": 0.8}.get(emotion, 0.3)
-    if emotion in {"angry", "happy"}:
+    emo = (emotion or "neutral").lower()
+    base = {"angry": 0.2, "neutral": 0.3, "happy": 0.28, "sad": 0.8, "fear": 0.7}.get(emo, 0.3)
+    if emo in {"angry", "happy"}:
         base = max(0.12, base - (0.1 * intensity))
-    elif emotion in {"sad", "fear"}:
+    elif emo in {"sad", "fear"}:
         base = min(1.2, base + (0.2 * intensity))
-    return round(base, 3)
+    return round(base + micro_pause_seconds(emo, intensity), 3)
 
 
 def create_silence_clip(output_path: Path, duration_sec: float) -> None:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class GenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pdf_path: str = Field(..., description="Absolute or relative path to a manga PDF file.")
+    srt_path: Optional[str] = Field(default=None, description="Optional SRT path for external master timeline.")
     page_from: Optional[int] = Field(default=None, ge=0)
     page_to: Optional[int] = Field(default=None, ge=0)
     panel_from: Optional[int] = Field(default=None, ge=0)

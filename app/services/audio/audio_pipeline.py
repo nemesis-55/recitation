@@ -63,6 +63,14 @@ def run_audio_pipeline(
             return "emotional"
         return "neutral"
 
+    def _derive_scene_emotion(chunk: list[SrtTimelineLine]) -> str:
+        emotions = [str(ln.emotion or "neutral").lower() for ln in chunk if (ln.text or "").strip()]
+        if not emotions:
+            return "neutral"
+        counts = Counter(emotions)
+        emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        return emo if emo in {"angry", "fear", "sad", "happy", "neutral"} else "neutral"
+
     def _scene_input(scene: dict) -> tuple[dict, list[SrtTimelineLine], list[str], Path, float, EpisodeState, object, object, object, object]:
         lo, hi = int(scene["panel_range"][0]), int(scene["panel_range"][1])
         lo = max(1, lo)
@@ -70,7 +78,14 @@ def run_audio_pipeline(
         chunk = [analyzed[i - 1] for i in range(lo, hi + 1)]
         paths = [panel_paths[min(i - 1, len(panel_paths) - 1)] for i in range(lo, hi + 1)]
         scene = dict(scene)
-        scene["scene_type"] = _derive_scene_type(chunk)
+        scene_type = str(scene.get("scene_type", "")).strip().lower()
+        if scene_type not in {"fight", "emotional", "neutral"}:
+            scene_type = _derive_scene_type(chunk)
+        scene_emotion = str(scene.get("scene_emotion", "")).strip().lower()
+        if scene_emotion not in {"angry", "fear", "sad", "happy", "neutral"}:
+            scene_emotion = _derive_scene_emotion(chunk)
+        scene["scene_type"] = scene_type
+        scene["scene_emotion"] = scene_emotion
         scene_dir = audio_dir / f"scene_{int(scene['scene_id']):03d}"
         scene_dir.mkdir(parents=True, exist_ok=True)
         scene_start = float(chunk[0].start_sec) if chunk else 0.0

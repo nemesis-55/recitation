@@ -9,15 +9,27 @@ from app.models.schemas import ScriptLine, SrtTimelineLine
 from app.services.audio.audio_mixer import mix_audio
 from app.services.audio.audio_rule_engine import resolve_audio_plan
 from app.services.audio.character_engine import get_character_profile, get_voice
+from app.services.audio.emotion_engine import analyze_emotion
 from app.services.audio.elevenlabs_engine import generate_sfx_event
 from app.services.audio.pause_engine import create_silence_clip
 from app.services.audio.pause_engine import pause_seconds
+from app.services.audio.sfx_alignment_engine import align_sfx
 from app.services.audio.speech_renderer import render_speech
 from app.services.audio.timeline_builder import AudioEvent, build_cinematic_timeline, build_timeline
 from app.services.audio.tts_elevenlabs import generate_tts
 from app.services.audio.music_engine import resolve_music_bed
 from app.utils.ffmpeg_runner import probe_duration_seconds
 from app.services.audio.episode_state import EpisodeState
+
+
+def _dominant_music_type(values: list[str]) -> str | None:
+    clean = [str(v).strip().lower() for v in values if str(v).strip()]
+    if not clean:
+        return None
+    counts: dict[str, int] = {}
+    for val in clean:
+        counts[val] = counts.get(val, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
 
 
 def _to_script_line(item: SrtTimelineLine, panel_path: str) -> ScriptLine:
@@ -28,6 +40,19 @@ def _to_script_line(item: SrtTimelineLine, panel_path: str) -> ScriptLine:
         emotion=item.emotion,
         emotion_intensity=item.intensity,
     )
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _scene_curve_value(index: int, total: int) -> float:
+    if total <= 1:
+        return 0.5
+    pos = float(index) / float(max(1, total - 1))
+    if pos <= 0.5:
+        return round(0.2 + (0.6 * pos), 3)  # 0.2 -> 0.5
+    return round(0.5 + (0.8 * (pos - 0.5)), 3)  # 0.5 -> 0.9
 
 
 def process_scene(
@@ -49,25 +74,41 @@ def process_scene(
 
     prev_voice_end = 0.0
     prev_pause = 0.0
+    music_type_votes: list[str] = []
 
     for idx, line in enumerate(scene_lines):
         panel_path = scene_panel_paths[min(idx, max(0, len(scene_panel_paths) - 1))]
         sl = _to_script_line(line, panel_path=panel_path)
         speaker_key = (sl.speaker or "unknown_1").strip().lower()
         sl.voice = episode_state.voice_map.get(speaker_key) or get_voice(sl, int(line.index))
+        base_emotion = str(sl.emotion or "neutral").lower()
+        base_intensity = float(sl.emotion_intensity or 0.5)
+        scene_emotion = str(scene.get("scene_emotion", "neutral")).lower()
+        refined_emotion, refined_intensity = analyze_emotion(
+            sl.narration,
+            scene_emotion,
+            base_emotion,
+            base_intensity,
+        )
+        curve = _scene_curve_value(idx, len(scene_lines))
+        effective_intensity = _clamp01((float(refined_intensity) * 0.65) + (curve * 0.35))
+        sl.emotion = refined_emotion
+        sl.emotion_intensity = effective_intensity
         profile = get_character_profile(sl, int(line.index))
         plan = resolve_audio_plan(
             sl.narration,
             sl.emotion,
-            float(sl.emotion_intensity or 0.5),
+            effective_intensity,
             str(scene.get("scene_type") or scene.get("description", "neutral")),
         )
         profile = {**profile, **plan.get("voice_settings", {})}
-        sl.pause_sec = float(plan.get("pause", pause_seconds(sl.emotion, float(sl.emotion_intensity or 0.5))))
+        if str(plan.get("music_type", "")).strip():
+            music_type_votes.append(str(plan.get("music_type")))
+        sl.pause_sec = float(plan.get("pause", pause_seconds(sl.emotion, effective_intensity)))
         sl.rendered_text = render_speech(
             sl.narration,
             sl.emotion,
-            float(sl.emotion_intensity or 0.5),
+            effective_intensity,
             speech_mode=str(plan.get("speech_mode", "none")),
         )
         voice_path = scene_audio_dir / f"line_{idx:03d}.mp3"
@@ -79,7 +120,7 @@ def process_scene(
                 text=sl.rendered_text,
                 voice_id=sl.voice,
                 emotion=sl.emotion,
-                intensity=float(sl.emotion_intensity or 0.5),
+                intensity=effective_intensity,
                 output_path=voice_path,
                 profile=profile,
             )
@@ -90,7 +131,8 @@ def process_scene(
         voice_events.append(AudioEvent(type="voice", file=str(voice_path), start=start, duration=voice_dur, line_index=idx))
 
         if settings.elevenlabs_sfx_enabled:
-            for sfx_i, evt in enumerate(plan.get("sfx_plan", []), start=1):
+            sfx_limit = 1 if curve < 0.55 else 2
+            for sfx_i, evt in enumerate(plan.get("sfx_plan", [])[:sfx_limit], start=1):
                 prompt = {
                     "impact": "Cinematic impact hit, tight transient and deep thump",
                     "thump": "Body thump impact, low-frequency floor hit",
@@ -103,11 +145,12 @@ def process_scene(
                 sfx_path = scene_audio_dir / f"sfx_{idx:03d}_{sfx_i}.mp3"
                 generate_sfx_event(prompt, 0.75, sfx_path)
                 sfx_dur = max(0.05, probe_func(sfx_path))
+                aligned = align_sfx(sl.rendered_text or sl.narration, voice_dur, str(evt))
                 sfx_events.append(
                     AudioEvent(
                         type="sfx",
                         file=str(sfx_path),
-                        start=max(0.0, start + 0.05 * sfx_i),
+                        start=max(0.0, start + float(aligned.get("timestamp", 0.0))),
                         duration=sfx_dur,
                         line_index=idx,
                     )
@@ -130,7 +173,12 @@ def process_scene(
             )
         )
 
-    scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir)
+    scene_music_type = _dominant_music_type(music_type_votes)
+    try:
+        scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir, scene_music_type)
+    except TypeError:
+        # Backward compatible test patch points with 2-arg resolve_music_bed.
+        scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir)
     music_event = AudioEvent(type="music", file=str(scene_music), start=0.0, duration=0.0, line_index=-1) if scene_music else None
     events = build_cinematic_timeline(voice_events, sfx_events, music_event)
     narration_path = scene_audio_dir / f"scene_{int(scene.get('scene_id', 0)):03d}.mp3"
