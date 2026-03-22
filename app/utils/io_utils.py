@@ -5,7 +5,7 @@ import re
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from app.config import settings
 
@@ -32,15 +32,29 @@ def derive_run_path_from_source(source_path: str) -> str | None:
         return None
     parts = [p for p in parsed.path.split("/") if p]
     # Typical: /en/romance/dirty-deeds/episode-1/viewer
-    if len(parts) >= 4:
-        genre = _slug(parts[1])
-        title = _slug(parts[2])
-        episode = _slug(parts[3])
-        return f"{genre}/{title}/{episode}"
+    # Some links can omit/replace the episode slug and only include `episode_no` query.
+    # Keep folder layout stable: <genre>/<title>/<episode>.
     if len(parts) >= 3:
-        genre = _slug(parts[-3])
-        title = _slug(parts[-2])
-        episode = _slug(parts[-1])
+        offset = 1 if parts[0].lower() in {"en", "es", "fr", "de", "id", "th", "zh-hant"} else 0
+        if len(parts) > offset + 2:
+            genre = _slug(parts[offset])
+            title = _slug(parts[offset + 1])
+            episode_part = parts[offset + 2]
+            episode = _slug(episode_part)
+            if episode in {"list", "viewer", "episode"}:
+                q = parse_qs(parsed.query or "")
+                ep_no = (q.get("episode_no") or [""])[0].strip()
+                if ep_no.isdigit():
+                    episode = f"ep-{int(ep_no)}"
+                else:
+                    episode = "episode-unknown"
+            return f"{genre}/{title}/{episode}"
+    if len(parts) >= 2:
+        genre = _slug(parts[-2])
+        title = _slug(parts[-1])
+        q = parse_qs(parsed.query or "")
+        ep_no = (q.get("episode_no") or [""])[0].strip()
+        episode = f"ep-{int(ep_no)}" if ep_no.isdigit() else "episode-unknown"
         return f"{genre}/{title}/{episode}"
     return None
 

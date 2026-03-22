@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 import time
 from pathlib import Path
@@ -7,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from app.config import settings
-from app.models.schemas import GenerateRequest, GenerateResponse
+from app.models.schemas import GenerateRequest, GenerateResponse, ScriptLine, SrtTimelineLine
 from app.services.narrator import generate_voice
 from app.services.ocr_engine import extract_text_batch
 from app.services.panel_animator import animate_panel
@@ -15,8 +14,7 @@ from app.services.panel_extractor import extract_panels
 from app.services.pdf_loader import load_pdf
 from app.services.preflight import run_preflight, validate_page_resolution
 from app.services.quality_checker import check_video
-from app.services.script_cleaner import clean_script
-from app.services.subtitle_generator import generate_subtitles
+from app.services.subtitle_generator import generate_subtitles, load_srt_timeline
 from app.services.timeline_builder import build_timeline
 from app.services.video_editor import assemble_video
 from app.services.webtoon_loader import is_webtoon_url, load_webtoon_panels
@@ -60,6 +58,56 @@ def _validate_panel_assets(panels) -> dict:
     }
 
 
+def _build_srt_lines_from_ocr(ocr_items, fallback_duration: float = 2.0) -> list[SrtTimelineLine]:
+    lines: list[SrtTimelineLine] = []
+    cursor = 0.0
+    for idx, item in enumerate(ocr_items, start=1):
+        text = (item.text or "").strip()
+        # Keep silent slots for low-confidence OCR instead of forcing filler speech.
+        if bool(getattr(item, "low_confidence", False)) and len(text) <= 16:
+            text = ""
+        # Simple duration heuristic for auto-generated subtitle timing.
+        dur = max(0.8, min(8.0, max(fallback_duration, len(text) * 0.055)))
+        lines.append(
+            SrtTimelineLine(
+                index=idx,
+                start_sec=round(cursor, 3),
+                end_sec=round(cursor + dur, 3),
+                text=text,
+            )
+        )
+        cursor += dur
+    return lines
+
+
+def _normalize_range(start: int | None, end: int | None) -> tuple[int, int] | None:
+    if start is None and end is None:
+        return None
+    lo = start if start is not None else end
+    hi = end if end is not None else start
+    if lo is None or hi is None:
+        return None
+    if hi < lo:
+        lo, hi = hi, lo
+    return int(lo), int(hi)
+
+
+def _apply_panel_ranges(panels, payload: GenerateRequest) -> tuple[list, dict]:
+    out = panels
+    page_range = _normalize_range(payload.page_from, payload.page_to)
+    panel_range = _normalize_range(payload.panel_from, payload.panel_to)
+    if page_range:
+        out = [p for p in out if page_range[0] <= int(p.page_index) <= page_range[1]]
+    if panel_range:
+        out = [p for p in out if panel_range[0] <= int(p.panel_index) <= panel_range[1]]
+    meta = {
+        "requested_page_range": [page_range[0], page_range[1]] if page_range else None,
+        "requested_panel_range": [panel_range[0], panel_range[1]] if panel_range else None,
+        "selected_panels": len(out),
+    }
+    return out, meta
+
+
 @router.post("/generate", response_model=GenerateResponse)
 def generate_video(payload: GenerateRequest) -> GenerateResponse:
     dirs = None
@@ -97,6 +145,20 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 _enforce_stage_timeout("panel_extractor", stage_start)
                 report["stages"]["panel_extractor"] = {"panels": len(panels)}
 
+        if any(v is not None for v in (payload.page_from, payload.page_to, payload.panel_from, payload.panel_to)):
+            original_count = len(panels)
+            panels, filter_meta = _apply_panel_ranges(panels, payload)
+            report["stages"]["panel_filter"] = {
+                "original_panels": original_count,
+                **filter_meta,
+            }
+            if not panels:
+                raise PipelineError(
+                    stage="panel_filter",
+                    message="No panels matched the requested page/panel range.",
+                    error_code="PANEL_RANGE_EMPTY",
+                )
+
         if payload.max_panels is not None:
             original_count = len(panels)
             panels = panels[: payload.max_panels]
@@ -106,7 +168,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 "selected_panels": len(panels),
             }
 
-        with StageTimer(logger, "ocr_engine"):
+        with StageTimer(logger, "srt_loader"):
             stage_start = time.time()
             qa_panels = _validate_panel_assets(panels)
             report["stages"]["panel_qa"] = qa_panels
@@ -114,41 +176,38 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             if qa_panels["missing_count"] > 0:
                 raise PipelineError(
                     stage="panel_qa",
-                    message=f"Missing panel files detected before OCR (count={qa_panels['missing_count']})",
+                    message=f"Missing panel files detected before SRT stage (count={qa_panels['missing_count']})",
                     error_code="PANEL_FILES_MISSING",
                 )
             if qa_panels["unreadable_count"] > 0:
                 raise PipelineError(
                     stage="panel_qa",
-                    message=f"Unreadable panel files detected before OCR (count={qa_panels['unreadable_count']})",
+                    message=f"Unreadable panel files detected before SRT stage (count={qa_panels['unreadable_count']})",
                     error_code="PANEL_FILES_UNREADABLE",
                 )
-            api_start = time.time()
-            ocr = extract_text_batch(panels)
-            _enforce_stage_timeout("ocr_engine", stage_start)
-            report["stages"]["ocr_engine"] = {
-                "items": len(ocr),
-                "model": settings.openai_model,
-                "elapsed_ms": round((time.time() - api_start) * 1000),
-            }
-
-        with StageTimer(logger, "script_cleaner"):
-            stage_start = time.time()
-            api_start = time.time()
-            script = clean_script(ocr)
-            _enforce_stage_timeout("script_cleaner", stage_start)
-            report["stages"]["script_cleaner"] = {
-                "lines": len(script),
-                "provider": "openai",
-                "model": settings.openai_model,
-                "elapsed_ms": round((time.time() - api_start) * 1000),
-            }
+            if payload.srt_path:
+                srt_lines = load_srt_timeline(payload.srt_path)
+                if len(srt_lines) > len(panels):
+                    srt_lines = srt_lines[: len(panels)]
+                report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": payload.srt_path, "source": "provided"}
+                logger.info("srt_loader source=provided entries=%s path=%s", len(srt_lines), payload.srt_path)
+            else:
+                # Backward-compatible path: auto-generate SRT timeline from OCR.
+                ocr = extract_text_batch(panels)
+                srt_lines = _build_srt_lines_from_ocr(ocr, fallback_duration=max(1.2, settings.min_panel_duration_sec))
+                if len(srt_lines) > len(panels):
+                    srt_lines = srt_lines[: len(panels)]
+                report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": None, "source": "auto_generated_from_ocr"}
+                report["warnings"].append("srt_path not provided: generated subtitle timeline from OCR.")
+                logger.info("srt_loader source=auto_generated_from_ocr entries=%s", len(srt_lines))
+            _enforce_stage_timeout("srt_loader", stage_start)
             report["artifacts"] = report.get("artifacts", {})
 
         with StageTimer(logger, "narrator"):
             stage_start = time.time()
             api_start = time.time()
-            narration_path, audio_segments, audio_meta = generate_voice(script, dirs["audio"])
+            panel_paths = [p.image_path for p in panels]
+            narration_path, audio_segments, audio_timeline, audio_meta = generate_voice(srt_lines, panel_paths, dirs["audio"])
             _enforce_stage_timeout("narrator", stage_start)
             report["stages"]["narrator"] = {
                 "segments": len(audio_segments),
@@ -158,29 +217,33 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 "elapsed_ms": round((time.time() - api_start) * 1000),
                 **audio_meta,
             }
-            report["artifacts"]["openai_narration"] = [
-                {
-                    "panel_path": line.panel_path,
-                    "speaker": line.speaker,
-                    "gender": line.gender,
-                    "voice": line.voice,
-                    "tts_provider": line.tts_provider,
-                    "emotion": line.emotion,
-                    "emotion_intensity": line.emotion_intensity,
-                    "rendered_text": line.rendered_text,
-                    "pause_sec": line.pause_sec,
-                    "narration": line.narration,
-                }
-                for line in script
-            ]
+            report["artifacts"]["srt_analysis"] = [line.model_dump() for line in srt_lines]
+            report["artifacts"]["audio_event_timeline"] = audio_timeline
             report["artifacts"]["audio_timeline"] = [seg.model_dump() for seg in audio_segments]
             write_json(dirs["meta"] / "audio_timeline.json", [seg.model_dump() for seg in audio_segments])
+            logger.info(
+                "narrator done segments=%s event_timeline=%s quality=%s",
+                len(audio_segments),
+                len(audio_timeline),
+                audio_meta.get("quality", "cinematic"),
+            )
 
         with StageTimer(logger, "timeline_builder"):
             stage_start = time.time()
-            timeline = build_timeline(panels, script, audio_segments)
+            script_lines = [
+                ScriptLine(
+                    panel_path=s.panel_path or panels[min(i, len(panels) - 1)].image_path,
+                    narration=(s.performance_text or s.text or "").strip(),
+                    speaker=s.speaker,
+                    emotion=s.emotion,
+                    emotion_intensity=s.intensity,
+                )
+                for i, s in enumerate(srt_lines[: len(panels)])
+            ]
+            # Use generated audio segments as timing source-of-truth to prevent video racing ahead.
+            timeline = build_timeline(panels, script_lines, audio_segments)
             _enforce_stage_timeout("timeline_builder", stage_start)
-            report["stages"]["timeline_builder"] = {"entries": len(timeline)}
+            report["stages"]["timeline_builder"] = {"entries": len(timeline), "source": "audio_segments"}
             write_json(dirs["meta"] / "timeline.json", [t.model_dump() for t in timeline])
 
         with StageTimer(logger, "panel_animator"):
@@ -251,7 +314,13 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         report["elapsed_sec"] = round(time.time() - start, 3)
         report_path = dirs["meta"] / "job_report.json"
         write_json(report_path, report)
-        return GenerateResponse(status="completed", video_path=str(final_video), report_path=str(report_path))
+        return GenerateResponse(
+            status="completed",
+            video_path=str(final_video),
+            audio_path=str(narration_path),
+            quality=audio_meta.get("quality", "cinematic"),
+            report_path=str(report_path),
+        )
     except PipelineError as exc:
         report["failed"] = {
             "stage": exc.stage,

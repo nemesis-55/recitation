@@ -38,6 +38,12 @@ body {
   border-radius: 12px;
   padding: 16px;
 }
+.catalog-box {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #2c313a;
+  border-radius: 8px;
+}
 .full { grid-column: 1 / -1; }
 
 h2 { margin-top: 0; font-size: 18px; }

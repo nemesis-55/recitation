@@ -7,6 +7,7 @@ from pathlib import Path
 import requests
 
 from app.config import settings
+from app.utils.cache_utils import hash_text, read_cache_bytes, write_cache_bytes
 from app.utils.errors import ProviderError
 
 
@@ -45,6 +46,14 @@ def generate_tts(text: str, voice_id: str, emotion: str, intensity: float, outpu
     fallback = (settings.elevenlabs_tts_model_fallback or "").strip()
     if fallback and fallback not in models:
         models.append(fallback)
+    cache_key = hash_text(
+        f"tts|{voice_id}|{emotion}|{round(float(intensity),3)}|{settings.elevenlabs_output_format}|{text.strip()}"
+    )
+    cached = read_cache_bytes("tts_audio", cache_key)
+    if cached:
+        output_path.write_bytes(cached)
+        return
+
     for model_id in models:
         payload = {
             "text": text,
@@ -76,6 +85,7 @@ def generate_tts(text: str, voice_id: str, emotion: str, intensity: float, outpu
                     break
                 resp.raise_for_status()
                 output_path.write_bytes(resp.content)
+                write_cache_bytes("tts_audio", cache_key, resp.content)
                 return
             except ProviderError:
                 raise

@@ -2,248 +2,109 @@
 
 ## Overview
 
-`manga_video_pipeline` turns manga sources into vertical recitation videos with optional subtitles.
+The runtime is now **SRT-driven**. Subtitles are the source of truth for timing and dialogue text.
 
-**Inputs**
+Inputs:
+- `pdf_path` (or webtoon URL)
+- optional `srt_path` (if missing, timeline is auto-generated from OCR)
 
-- Local PDF path  
-- Webtoon episode URL  
+Outputs:
+- `final/video.mp4`
+- `audio/narration.mp3`
+- `meta/timeline.json`, `meta/audio_timeline.json`, `meta/job_report.json`
 
-**Main outputs**
+## Runtime Flow
 
-- `final/video.mp4` — final video  
-- `final/subtitles.srt` — when subtitles are enabled  
-- `meta/job_report.json` — per-stage report  
-- `meta/timeline.json`, `meta/audio_timeline.json` — timing metadata  
-- `audio/narration.mp3` — full narration mix (voice + optional bed + optional SFX/ambience)  
+1. `preflight`
+2. `pdf_loader` / `webtoon_loader`
+3. `panel_extractor` (PDF only)
+4. `srt_loader` (`load_srt_timeline`)
+5. `narrator`:
+   - `dialogue_analyzer.analyze_srt_timeline` (OpenAI)
+   - `speech_renderer.render_speech` (deterministic)
+   - `tts_elevenlabs.generate_tts` per SRT line
+   - optional STS modulation (`elevenlabs_sts`)
+   - `sfx_engine.materialize_sfx_for_line` (ElevenLabs Sound Effects)
+   - `music_engine.resolve_music_bed` (ElevenLabs Music)
+   - `audio_mixer.mix_audio` (ducking + limiter/normalization)
+6. `timeline_builder` (`build_timeline_from_srt`)
+7. `panel_animator`
+8. `subtitle_generator`
+9. `video_editor`
+10. `quality_checker`
 
----
+When `WEBTOON_CATALOG_ENABLED=true`, startup includes a blocking catalog refresh stage before the API begins serving traffic.
 
-## End-to-End Flow
+## Key Contracts
 
-1. **preflight** — Keys, disk space, basic config.  
-2. **pdf_loader** or **webtoon_loader** — Pages or downloaded panels.  
-3. **panel_extractor** (PDF only) — Panel crops.  
-4. **ocr_engine** — OpenAI vision OCR per batch.  
-5. **script_cleaner** — OCR → structured `ScriptLine`s (OpenAI text).  
-6. **narrator** / **audio_pipeline** — Dialogue analysis, ElevenLabs TTS, optional **local** music bed, SFX/ambience, `narration.mp3`.  
-7. **timeline_builder** — Panel durations from audio.  
-8. **panel_animator** — `clip_*.mp4` per panel.  
-9. **subtitle_generator** — SRT from timeline.  
-10. **video_editor** — Concat clips, mux narration, optional **final BGM**, optional subtitle burn/embed, **`VIDEO_PLAYBACK_SPEED`**.  
-11. **quality_checker** — Stream checks, duration / A-V delta gates.  
-12. **Artifact cleanup** (default) — Deletes `clips/*.mp4`, `final/merged.mp4`, `final/concat.txt` when `RUN_KEEP_INTERMEDIATE_CLIPS=false` and the run succeeds.
+- `SrtTimelineLine`: `index`, `start_sec`, `end_sec`, `text`, `speaker`, `emotion`, `intensity`.
+- `GenerateResponse` success includes:
+  - `video_path`
+  - `audio_path`
+  - `quality` (`cinematic`)
+- `EpisodeRangeGenerateRequest` and `EpisodeRangeGenerateResponse` drive sequential episode-range runs from local catalog.
 
----
+## Local Webtoon Catalog
 
-## Source Types and Run Paths
+Catalog file is stored under `outputs/meta/<WEBTOON_CATALOG_FILE>`.
 
-Runs live under:
+Supported operations:
+- crawl/refresh catalog
+- search by `query` and `genre`
+- list episodes by `title_slug`
 
-`outputs/runs/<run_key>/`
+Ops endpoints:
+- `GET /ops/api/manga`
+- `GET /ops/api/manga/{title_slug}/episodes`
+- `GET /ops/api/manga/status`
+- `POST /ops/api/manga/refresh`
+- `POST /ops/api/generate-range`
 
-Webtoon URLs use nested keys:
+Episode range runs are processed sequentially and return per-episode results.
 
-`outputs/runs/<genre>/<title>/<episode>/`  
-Example: `outputs/runs/romance/dirty-deeds/episode-1`
+## Audio Design
 
-If the key exists, suffixes are applied (`episode-1_2`, …).
+- Voice is primary.
+- Music is scene-level and mixed under voice.
+- SFX are event-driven (`hit`, `fall`, `fear`, `movement` mapping).
+- Mixer applies sidechain ducking (music attenuates while voice is present).
+- Final limiter avoids clipping.
 
----
+## Provider Policy
 
-## Run Folder Structure
+- No local fallback for ElevenLabs generation.
+- SFX/Music/TTS failures raise provider errors and stop run.
 
-```text
-outputs/runs/<run_key>/
-  pages/          # PDF page images (PDF only)
-  panels/         # Panel images
-  audio/          # group_*.mp3, pause_*.mp3, narration.mp3, concat lists, etc.
-  clips/          # clip_*.mp4 (removed after success if RUN_KEEP_INTERMEDIATE_CLIPS=false)
-  final/
-    video.mp4
-    subtitles.srt # optional
-    merged.mp4      # optional; removed after success when cleanup enabled
-    concat.txt      # optional; removed after success when cleanup enabled
-  meta/
-    timeline.json
-    audio_timeline.json
-    job_report.json
-```
+## Important Settings
 
-**Panels and `audio/` are kept** so you can re-run or debug timing/TTS without re-OCRing. Enable `RUN_KEEP_INTERMEDIATE_CLIPS=true` to retain all per-panel clips and concat intermediates.
-
----
-
-## Dialogue Model (`ScriptLine`)
-
-Produced by **script_cleaner** (one line per OCR panel row, same order).
-
-| Field | Notes |
-|--------|--------|
-| `panel_path` | Source panel image path |
-| `narration` | Text for TTS; merged from LLM + OCR so words are not dropped |
-| `speaker` | `male_1`, `male_2`, `female_1`, `female_2`, `narrator`, `unknown_1` |
-| `gender` | `male`, `female`, `unknown` |
-| `emotion` | `angry`, `sad`, `fear`, `happy`, `neutral` |
-| `emotion_intensity` | Optional `0..1`; if omitted, **dialogue_analyzer** estimates from text |
-| `voice`, `rendered_text`, `pause_sec`, `tts_provider` | Filled during audio pipeline |
-
-**Script cleaner behavior**
-
-- Strict enums for speaker / gender / emotion.  
-- **Preserves** gasps and short vocals (`huu`, `haa`, etc.); very stretched tokens are normalized (e.g. long `uuu` → `uu`) for cleaner TTS.  
-- **Merges** LLM output with OCR when the model under-generates, so OCR tokens are not lost.
-
----
-
-## Audio Pipeline (ElevenLabs TTS only)
-
-**External APIs**
-
-- **OpenAI** — OCR + script cleaning (not TTS).  
-- **ElevenLabs** — **Text-to-speech only** (`generate_tts` / streaming). There is **no** ElevenLabs Music API or Sound Generation client in this repo.
-
-**Voice selection**
-
-- `narrator` → `ELEVENLABS_VOICE_NARRATOR`  
-- `gender` male/female → male/female defaults  
-- `unknown` → alternates male/female by line index  
-- Optional **`ELEVENLABS_VOICE_MAP_JSON`**: JSON object mapping `speaker` id → ElevenLabs voice id (overrides defaults for that speaker).
-
-**Grouping**
-
-- `AUDIO_GROUPING_ENABLED` — merge adjacent compatible lines into one TTS call (faster, fewer seams).  
-- `AUDIO_STRICT_PER_LINE_TTS=true` — one TTS call per line (ignores grouping).  
-- `AUDIO_GROUP_MAX_CHARS` — soft cap for merged text length.
-
-**Performance text**
-
-- **speech_renderer** adjusts punctuation/spacing from emotion + intensity (fear, sad, angry caps, etc.).  
-- **pause_engine** adds pauses after lines; clips respect `MIN_PANEL_DURATION_SEC` / `MAX_PANEL_DURATION_SEC`.
-
-**Narration music bed (local files only)**
-
-Controlled by:
-
-- `AUDIO_BED_IN_NARRATION` — master switch for mixing a bed **into** `narration.mp3`.  
-- `AUDIO_MUSIC_LOCAL_MAP_JSON` — JSON `emotion` → absolute or cwd-relative path to a loopable track (dominant emotion across lines picks the file).  
-- `AUDIO_USE_BGM_DEFAULT_AS_BED` — if no local-map hit, use `BGM_DEFAULT_PATH` as the bed **when** it exists.  
-- `AUDIO_MUSIC_VOLUME` — bed level vs voice (voice-led `amix`, `duration=first`).
-
-**Avoiding double BGM**
-
-If the narration bed came from **`bgm_default`** (not from `AUDIO_MUSIC_LOCAL_MAP_JSON`) and the HTTP request did **not** set `bgm_path`, the **final video mux skips** `BGM_DEFAULT_PATH` so the same file is not mixed twice. If you pass `bgm_path` on the request, final mux still applies it.
-
-**SFX and ambience**
-
-- Local files under `assets/sfx/` via **sfx_engine** (`pick_sfx`).  
-- Optional `AUDIO_AMBIENCE_PATH` loop mixed in **audio_mixer** after the voice (+bed) stem.
-
-**Relevant env vars**
-
-`ELEVENLABS_API_KEY`, `ELEVENLABS_API_BASE_URL`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_TTS_MODEL_FALLBACK`, `ELEVENLABS_OUTPUT_FORMAT`, `ELEVENLABS_VOICE_*`, `ELEVENLABS_VOICE_MAP_JSON`, `TTS_PROVIDER`, `TTS_PROVIDER_ORDER`, `AUDIO_*` and `BGM_*` as in `app/config.py`, `PROVIDER_TIMEOUT_SEC`, `PROVIDER_RETRIES`, `AUDIO_VOICE_FX_ENABLED`.
-
----
-
-## Video Assembly
-
-- Clips are concatenated (silent video), then merged with **`audio/narration.mp3`** (encoded to AAC in the final container).  
-- **`VIDEO_PLAYBACK_SPEED`** (default `1.0`):  
-  - `1.0` — no `setpts` / `atempo` speed change on narration; minimal processing.  
-  - Other values — video `setpts` and narration `atempo` stay matched.  
-- Optional **final BGM** track: `bgm_path` on the request, else `BGM_DEFAULT_PATH`, with `BGM_VOLUME` and `amix` `duration=first` against narration.
-
----
-
-## Sync Strategy
-
-1. Timeline uses measured audio segment durations.  
-2. Empty narration panels get at least `MIN_PANEL_DURATION_SEC`.  
-3. Final mux uses `-shortest` so video does not run past the primary audio bus.  
-4. **quality_checker** reports `av_delta_sec` vs `AV_SYNC_MAX_DELTA_SEC`.
-
----
+- SRT: `SRT_REQUIRE_INPUT`, `SRT_MIN_LINE_DURATION_SEC`, `SRT_MAX_LINE_DURATION_SEC`
+- OpenAI analysis: `OPENAI_DIALOGUE_ANALYSIS_ENABLED`, `OPENAI_DIALOGUE_ANALYSIS_MODEL`
+- ElevenLabs TTS: `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_OUTPUT_FORMAT`, `ELEVENLABS_VOICE_*`
+- ElevenLabs SFX: `ELEVENLABS_SFX_ENABLED`, `ELEVENLABS_SFX_MODEL_ID`, `ELEVENLABS_SFX_PROMPT_INFLUENCE`
+- ElevenLabs Music: `ELEVENLABS_MUSIC_ENABLED`, `ELEVENLABS_MUSIC_MODEL_ID`, `ELEVENLABS_MUSIC_FORCE_INSTRUMENTAL`
+- Mixer: `AUDIO_MIXER_*` (voice/sfx/music gain + ducking + normalize)
+- Optional STS: `ELEVENLABS_STS_*`
+- Catalog: `WEBTOON_CATALOG_*`
+- OpenAI pacing/batching: `OPENAI_OCR_BATCH_SIZE`, `OPENAI_OCR_BATCH_PACE_SEC`, `OPENAI_DIALOGUE_BATCH_SIZE`, `OPENAI_DIALOGUE_BATCH_PACE_SEC`
 
 ## Caching
 
-Cache root: `outputs/cache/` (under pipeline `outputs/`).
+Byte caches are used for:
+- `tts_audio`
+- `elevenlabs_sfx`
+- `elevenlabs_music`
+- `elevenlabs_sts` (when enabled)
 
-Namespaces include:
+## INFO Observability Logs
 
-- `ocr_engine`  
-- `script_cleaner_chunks`, `script_cleaner`  
-- `tts_audio` (when enabled in TTS layer)  
-
-Disable: `ENABLE_CACHE=false`.
-
----
-
-## API Endpoints
-
-- `POST /generate` — main job.  
-- Ops: `GET /ops`, `GET /ops/api/runs`, `GET /ops/api/runs/{run_path}`, `GET /ops/api/runs/{run_path}/video`, `POST /ops/api/generate`.  
-
-`run_path` may be nested (URL-encoded slashes).
-
----
-
-## Key Environment Variables (reference)
-
-Aligned with `app/config.py` (see file for defaults):
-
-**Core:** `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `OPENAI_MODEL`, `LOG_LEVEL`, `APP_ENV`
-
-**Video / output:** `OUTPUT_ROOT`, `DEFAULT_FPS`, `TARGET_WIDTH`, `TARGET_HEIGHT`, `VIDEO_PLAYBACK_SPEED`, `RUN_KEEP_INTERMEDIATE_CLIPS`
-
-**PDF / panels:** `MAX_PAGES`, `MAX_PAGE_MEGAPIXELS`, `DEFAULT_DPI`, `MIN_FREE_DISK_MB`
-
-**Duration gates:** `MIN_PANEL_DURATION_SEC`, `MAX_PANEL_DURATION_SEC`, `MIN_VIDEO_DURATION_SEC`, `MAX_VIDEO_DURATION_SEC`
-
-**OCR:** `OPENAI_OCR_BATCH_SIZE`, `OPENAI_OCR_MAX_IMAGE_DIM`, `OPENAI_OCR_JPEG_QUALITY`, `OPENAI_OCR_RECOVERY_BATCHES`
-
-**Script cleaner:** `OPENAI_SCRIPT_BATCH_SIZE`, `OPENAI_SKIP_EMPTY_OCR_FOR_CLEANER`, `OPENAI_DEBUG_IO`
-
-**Subtitles:** `ENABLE_SUBTITLES_DEFAULT`, `SUBTITLE_STRICT_FROM_SCRIPT`
-
-**Audio / BGM:** `BGM_DEFAULT_PATH`, `BGM_VOLUME`, `AUDIO_BED_IN_NARRATION`, `AUDIO_MUSIC_LOCAL_MAP_JSON`, `AUDIO_MUSIC_VOLUME`, `AUDIO_USE_BGM_DEFAULT_AS_BED`, `AUDIO_AMBIENCE_PATH`, `AUDIO_AMBIENCE_VOLUME`, `AUDIO_SFX_VOLUME`, `AUDIO_VOICE_FX_ENABLED`, `AUDIO_GROUPING_ENABLED`, `AUDIO_STRICT_PER_LINE_TTS`, `AUDIO_GROUP_MAX_CHARS`, `ELEVENLABS_VOICE_MAP_JSON`, plus all `ELEVENLABS_*` TTS fields above
-
-**Reliability:** `STAGE_TIMEOUT_SEC`, `PROVIDER_TIMEOUT_SEC`, `PROVIDER_RETRIES`, `AV_SYNC_MAX_DELTA_SEC`, `ENABLE_CACHE`
-
----
-
-## Troubleshooting
-
-### Input / network
-
-- `PDF_NOT_FOUND`, Webtoon fetch errors → check path, URL, and network.
-
-### OpenAI
-
-- Rate limits / auth → `OPENAI_RATE_LIMITED`, `OPENAI_AUTH_FAILED`; reduce batch sizes, verify key.  
-- `OPENAI_DEBUG_IO=true` logs request/response summaries for OCR/script stages.
-
-### ElevenLabs TTS
-
-- Empty script → `TTS_EMPTY_SCRIPT`.  
-- Verify `ELEVENLABS_API_KEY` and voice IDs.
-
-### Subtitles
-
-- If FFmpeg has no `subtitles` filter, the pipeline falls back to a separate subtitle track.
-
-### A/V drift
-
-- Compare `ffprobe` on `video.mp4` streams vs `meta/timeline.json` / `audio/narration.mp3`.
-
-### Unwanted narration wording
-
-- Inspect cleaned script in `job_report.json` artifacts; clear `outputs/cache/script_cleaner*` (and full cache if needed) to invalidate.
-
-### Missing music bed
-
-- Ensure `AUDIO_BED_IN_NARRATION=true` and either a valid `AUDIO_MUSIC_LOCAL_MAP_JSON` entry for the dominant emotion or `BGM_DEFAULT_PATH` with `AUDIO_USE_BGM_DEFAULT_AS_BED=true`.
-
----
+INFO logs are emitted for:
+- startup blocking catalog refresh begin/end + duration
+- crawler progress (genre/title/episode counts and failures)
+- sequential episode queue lifecycle
+- SRT source selection (`provided` vs `auto_generated_from_ocr`)
+- dialogue analyzer chunk progress
+- OCR pacing intervals and batch progress
+- audio pipeline milestones (line generation and mixer begin/end)
 
 ## Testing
 
@@ -251,13 +112,3 @@ Aligned with `app/config.py` (see file for defaults):
 cd manga_video_pipeline
 python3 -m pytest tests/ -q
 ```
-
-Smoke: short run with small `max_panels`, then inspect `meta/job_report.json` and play `final/video.mp4`.
-
----
-
-## Security
-
-- Do not commit real `.env` secrets.  
-- Rotate keys if exposed.  
-- Treat run folders as sensitive if they include copyrighted manga assets.

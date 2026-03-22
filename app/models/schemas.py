@@ -8,15 +8,22 @@ from pydantic import BaseModel, Field
 
 class GenerateRequest(BaseModel):
     pdf_path: str = Field(..., description="Absolute or relative path to a manga PDF file.")
+    srt_path: Optional[str] = Field(default=None, description="Absolute or relative path to source subtitles .srt file.")
     subtitles: bool = Field(default=True)
     target_duration_sec: Optional[int] = Field(default=None, ge=30, le=180)
     max_panels: Optional[int] = Field(default=None, ge=1, le=500)
+    page_from: Optional[int] = Field(default=None, ge=0)
+    page_to: Optional[int] = Field(default=None, ge=0)
+    panel_from: Optional[int] = Field(default=None, ge=0)
+    panel_to: Optional[int] = Field(default=None, ge=0)
     bgm_path: Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
     status: Literal["completed", "failed"]
     video_path: Optional[str] = None
+    audio_path: Optional[str] = None
+    quality: Optional[str] = None
     stage: Optional[str] = None
     provider: Optional[str] = None
     error_code: Optional[str] = None
@@ -85,6 +92,57 @@ class SubtitleEntry(BaseModel):
     start_sec: float
     end_sec: float
     text: str
+
+
+class SrtTimelineLine(BaseModel):
+    index: int
+    start_sec: float
+    end_sec: float
+    text: str
+    speaker: str = "unknown_1"
+    emotion: str = "neutral"
+    intensity: float = 0.5
+    performance_text: Optional[str] = None
+    panel_path: Optional[str] = None
+
+
+class CinematicAudioResponse(BaseModel):
+    audio_path: str
+    timeline: list[dict[str, Any]]
+    quality: Literal["cinematic"]
+
+
+class MangaSearchResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int
+    updated_at: Optional[str] = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
+class EpisodeRangeGenerateRequest(BaseModel):
+    title_slug: str
+    episode_from: Optional[int] = Field(default=None, ge=0)
+    episode_to: Optional[int] = Field(default=None, ge=0)
+    episode_numbers: Optional[list[int]] = None
+    select_all_episodes: bool = False
+    subtitles: bool = True
+    target_duration_sec: Optional[int] = Field(default=None, ge=30, le=180)
+    max_panels: Optional[int] = Field(default=None, ge=1, le=500)
+    page_from: Optional[int] = Field(default=None, ge=0)
+    page_to: Optional[int] = Field(default=None, ge=0)
+    panel_from: Optional[int] = Field(default=None, ge=0)
+    panel_to: Optional[int] = Field(default=None, ge=0)
+    bgm_path: Optional[str] = None
+    srt_path: Optional[str] = None
+
+
+class EpisodeRangeGenerateResponse(BaseModel):
+    status: Literal["completed", "failed", "partial"]
+    title_slug: str
+    submitted: int
+    completed: int
+    failed: int
+    results: list[dict[str, Any]]
 
 
 class QualityReport(BaseModel):

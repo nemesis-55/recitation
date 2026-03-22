@@ -9,9 +9,12 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
-from app.models.schemas import GenerateRequest
+from app.models.schemas import EpisodeRangeGenerateRequest, GenerateRequest
+from app.services.episode_queue import run_episode_range_sequential
+from app.services.manga_catalog import load_catalog, list_episodes, search_titles
 from app.routes.generate import generate_video
 from app.services.ops_observer import get_run_detail, list_runs
+from app.services.webtoon_catalog_crawler import crawl_webtoon_catalog
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -60,3 +63,39 @@ def run_video(run_path: str):
 @router.post("/api/generate")
 def generate_from_ops(payload: GenerateRequest):
     return generate_video(payload)
+
+
+@router.get("/api/manga")
+def manga_search(query: Optional[str] = None, genre: Optional[str] = None, limit: int = 50, offset: int = 0):
+    return JSONResponse(search_titles(query=query, genre=genre, limit=limit, offset=offset))
+
+
+@router.get("/api/manga/{title_slug}/episodes")
+def manga_episodes(title_slug: str):
+    episodes = list_episodes(title_slug)
+    return JSONResponse({"title_slug": title_slug, "episodes": episodes, "total": len(episodes)})
+
+
+@router.get("/api/manga/status")
+def manga_status():
+    payload = load_catalog()
+    return JSONResponse(
+        {
+            "updated_at": payload.get("updated_at"),
+            "stats": payload.get("stats", {}),
+            "enabled": settings.webtoon_catalog_enabled,
+        }
+    )
+
+
+@router.post("/api/manga/refresh")
+def manga_refresh():
+    if not settings.webtoon_catalog_enabled:
+        raise HTTPException(status_code=400, detail="WEBTOON_CATALOG_ENABLED=false")
+    payload = crawl_webtoon_catalog()
+    return JSONResponse({"ok": True, "updated_at": payload.get("updated_at"), "stats": payload.get("stats", {})})
+
+
+@router.post("/api/generate-range")
+def generate_range(payload: EpisodeRangeGenerateRequest):
+    return run_episode_range_sequential(payload)

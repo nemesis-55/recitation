@@ -8,8 +8,9 @@ def test_ops_dashboard_route():
     response = client.get("/ops")
     assert response.status_code == 200
     assert "Operations Dashboard" in response.text
-    assert "OpenAI Narration" in response.text
+    assert "SRT Cinematic Analysis" in response.text
     assert "Max Panels to Evaluate" in response.text
+    assert "SRT Path (optional)" in response.text
 
 
 def test_ops_runs_api_route():

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.models.schemas import SubtitleEntry, TimelineEntry
+from app.models.schemas import SrtTimelineLine, SubtitleEntry, TimelineEntry
+from app.services.audio.srt_timeline import parse_srt_file
 
 
 def _to_srt_time(seconds: float) -> str:
@@ -52,3 +53,7 @@ def generate_subtitles(timeline: list[TimelineEntry], out_path: Path) -> tuple[P
         chunks.append(f"{e.index}\n{_to_srt_time(e.start_sec)} --> {_to_srt_time(e.end_sec)}\n{e.text}\n")
     out_path.write_text("\n".join(chunks), encoding="utf-8")
     return out_path, entries
+
+
+def load_srt_timeline(path: str | Path) -> list[SrtTimelineLine]:
+    return parse_srt_file(path)

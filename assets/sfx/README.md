@@ -1,20 +1,12 @@
 # Sound effects assets (`assets/sfx/`)
 
-The pipeline can mix **short, subtle** one-shots under narration via `pick_sfx()` in `app/services/audio/sfx_engine.py`. Files are **optional**: missing files are skipped without failing the job.
+The cinematic runtime now uses **ElevenLabs Sound Effects API** for SFX generation.
 
-## Files used by current code
+- Event mapping: `hit`, `fall`, `fear`, `movement`
+- Source: generated via `/v1/sound-generation`
+- Fallback policy: none (provider failure is fatal)
 
-| File | When it is picked |
-|------|-------------------|
-| `breath_light.mp3` | Line emotion is `fear` |
-| `impact_thump_soft.mp3` | Line emotion is `angry` |
-| `soft_exhale.mp3` | Line emotion is `sad` |
-| `room_tone_soft.mp3` | Line emotion is `neutral` or `happy` |
-| `breath_heavy.mp3` | Extra layer when narration matches exertion patterns (`hu`, `ha`, `ah`, `uh`, …) |
-
-At most **two** SFX paths are returned per line (emotion file + optional breath heavy).
-
-Other filenames may exist in this folder for your own experiments; they are **not** wired unless you extend `sfx_engine.py`.
+This folder can still hold manual reference assets for development, but runtime SFX generation does not depend on fixed local filenames.
 
 ## Loudness
 
@@ -23,12 +15,13 @@ Other filenames may exist in this folder for your own experiments; they are **no
 
 ## Sourcing
 
-Use **royalty-free** packs or original recordings. This repo does **not** call ElevenLabs Sound Generation; everything here is **local files only**.
+Use **royalty-free** packs or original recordings for local experimentation.
 
 ## Related env vars
 
-- `AUDIO_SFX_VOLUME` — per-event level in **audio_mixer**  
-- `AUDIO_AMBIENCE_PATH` / `AUDIO_AMBIENCE_VOLUME` — optional loop under the full narration stem  
-- `AUDIO_MUSIC_VOLUME`, `AUDIO_MUSIC_LOCAL_MAP_JSON`, `AUDIO_BED_IN_NARRATION`, `BGM_DEFAULT_PATH` — instrumental **bed** mixed into `narration.mp3` (see main docs)
+- `ELEVENLABS_SFX_ENABLED`
+- `ELEVENLABS_SFX_MODEL_ID`
+- `ELEVENLABS_SFX_PROMPT_INFLUENCE`
+- `AUDIO_MIXER_SFX_GAIN`
 
 Full pipeline audio behavior: [`DETAILED_DOCUMENTATION.md`](../../DETAILED_DOCUMENTATION.md).

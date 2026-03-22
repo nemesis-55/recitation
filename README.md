@@ -1,19 +1,15 @@
-# Manga Video Pipeline
+# Manga Video Pipeline (SRT-Driven Cinematic Audio)
 
-Production-oriented pipeline that converts a manga PDF (or Webtoon episode URL) into a vertical cinematic recitation video.
+Pipeline for building vertical manga recap videos with **SRT as the master timeline** and cinematic audio generation.
 
 Detailed technical guide: [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.md).
 
-## Features
+## What It Does
 
-- End-to-end flow: PDF/Webtoon → panels → **OpenAI OCR** → **OpenAI script cleaning** → **ElevenLabs TTS only** → panel animation → timeline → subtitles → final video.
-- **Optional music bed** under narration: local files / `BGM_DEFAULT_PATH` (no ElevenLabs Music or Sound Generation APIs).
-- **Final video at 1× speed by default** (`VIDEO_PLAYBACK_SPEED`); video and narration stay in sync when you change speed.
-- **Disk use:** by default, per-panel `clips/` and `final/merged.mp4` + `concat.txt` are removed after a successful run (`RUN_KEEP_INTERMEDIATE_CLIPS=false`).
-- Strict fail-fast for required providers: OpenAI or ElevenLabs TTS failures stop the job with a structured error.
-- Vertical output (`1080×1920`) with Ken Burns–style motion from original panels.
-- Stage artifacts and `job_report.json` under `outputs/runs/<run_key>/`.
-- Webtoon runs use nested folders: `outputs/runs/<genre>/<title>/<episode>/`.
+- Input: manga source (`pdf_path` or webtoon URL) + optional subtitle source SRT (`srt_path`).
+- Audio flow: SRT -> OpenAI dialogue analysis -> deterministic speech rendering -> ElevenLabs TTS per line -> ElevenLabs SFX -> ElevenLabs scene music -> cinematic FFmpeg mix.
+- Video flow: panels are animated using SRT durations, then muxed with narration and subtitles.
+- Provider failures are **fatal** (no local fallback for ElevenLabs SFX/Music/TTS).
 
 ## Project Layout
 
@@ -35,9 +31,9 @@ manga_video_pipeline/
 
 - Python 3.10+
 - FFmpeg and FFprobe in `PATH`
-- Poppler (for `pdf2image`, PDF input only)
-- **OpenAI** API key (OCR + script cleaner)
-- **ElevenLabs** API key (**text-to-speech only**)
+- Poppler (for PDF input)
+- OpenAI API key (dialogue analysis)
+- ElevenLabs API key (TTS + SFX + Music; optional STS)
 
 ## Environment
 
@@ -58,21 +54,24 @@ LOG_LEVEL=INFO
 VIDEO_PLAYBACK_SPEED=1.0
 RUN_KEEP_INTERMEDIATE_CLIPS=false
 
-# BGM in final mux (see DETAILED_DOCUMENTATION for dedupe with narration bed)
+# SRT master timeline
+SRT_REQUIRE_INPUT=true
+
+# BGM in final mux
 BGM_DEFAULT_PATH=/absolute/path/to/bed.mp3
 BGM_VOLUME=0.14
 
-# Narration: optional instrumental bed (local files only)
+# Cinematic narration mix
 AUDIO_BED_IN_NARRATION=true
-AUDIO_USE_BGM_DEFAULT_AS_BED=true
-AUDIO_MUSIC_VOLUME=0.12
-# JSON map: emotion -> file path, e.g. {"fear":"/path/tense.mp3","neutral":"/path/soft.mp3"}
-AUDIO_MUSIC_LOCAL_MAP_JSON=
+AUDIO_MIXER_DUCKING_ENABLED=true
+AUDIO_MIXER_MUSIC_GAIN=0.16
+AUDIO_MIXER_SFX_GAIN=0.7
+AUDIO_MIXER_VOICE_GAIN=1.0
 
-# TTS grouping (disable for one API call per line)
-AUDIO_GROUPING_ENABLED=true
-AUDIO_STRICT_PER_LINE_TTS=false
-AUDIO_GROUP_MAX_CHARS=220
+# ElevenLabs generation
+ELEVENLABS_SFX_ENABLED=true
+ELEVENLABS_MUSIC_ENABLED=true
+ELEVENLABS_STS_ENABLED=false
 
 # Per-speaker ElevenLabs voice IDs (JSON)
 ELEVENLABS_VOICE_MAP_JSON=
@@ -110,28 +109,29 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir manga_video
 
 - Open `http://127.0.0.1:8000/ops` for the operations dashboard.
 - Start jobs, browse runs, inspect `job_report.json`, preview `video.mp4`.
+- Search local Webtoon catalog by genre/title and generate episode ranges sequentially.
+- Refresh catalog index from crawler using the UI button.
 
-## Generate Video
+## Generate Video (`POST /generate`)
 
-`POST /generate`
+`srt_path` is optional. If omitted, subtitles timeline is auto-generated from OCR.
 
 ```json
 {
   "pdf_path": "/absolute/path/to/manga.pdf",
+  "srt_path": "/absolute/path/to/subtitles.srt",
   "subtitles": true
 }
 ```
-
-Webtoon episode URL in `pdf_path` is supported; the pipeline downloads ordered panel images and continues as with PDFs.
-
-Optional request fields include `target_duration_sec`, `max_panels`, and `bgm_path` (overrides default BGM for the **final video mux** when set).
 
 **Success:**
 
 ```json
 {
   "status": "completed",
-  "video_path": "manga_video_pipeline/outputs/runs/<run_key>/final/video.mp4"
+  "video_path": "manga_video_pipeline/outputs/runs/<run_key>/final/video.mp4",
+  "audio_path": "manga_video_pipeline/outputs/runs/<run_key>/audio/narration.mp3",
+  "quality": "cinematic"
 }
 ```
 
@@ -140,21 +140,54 @@ Optional request fields include `target_duration_sec`, `max_panels`, and `bgm_pa
 ```json
 {
   "status": "failed",
-  "stage": "script_cleaner",
-  "provider": "openai",
-  "error_code": "OPENAI_CLEAN_FAILED",
+  "stage": "srt_loader",
+  "error_code": "SRT_REQUIRED",
   "error": "..."
 }
 ```
 
 ## Operational Notes
 
-- No automatic fallback to a second TTS provider; ElevenLabs is the narration implementation.
-- Each stage logs timing; `meta/job_report.json` records stages (including `narration_music_source` when a bed was applied).
-- Ops API supports nested run keys (e.g. `romance/dirty-deeds/episode-1`).
+- `script_cleaner` has been removed from runtime; SRT is authoritative for timing/text.
+- ElevenLabs SFX/Music/TTS failures are surfaced as provider errors and stop the run.
+- `meta/job_report.json` includes `srt_analysis` and `audio_event_timeline`.
+- Optional OCR fallback remains when `srt_path` is not provided.
+
+## Webtoon Catalog + Episode Range
+
+New ops APIs:
+
+- `GET /ops/api/manga` — searchable local catalog
+- `GET /ops/api/manga/{title_slug}/episodes` — episodes for selected title
+- `GET /ops/api/manga/status` — catalog refresh status
+- `POST /ops/api/manga/refresh` — manual crawl refresh
+- `POST /ops/api/generate-range` — sequential per-episode generation
+
+Startup behavior:
+
+- If `WEBTOON_CATALOG_ENABLED=true`, the app performs a **blocking** catalog refresh at startup.
+- Startup serves requests only after refresh is done.
 
 ## Testing
 
 ```bash
 cd manga_video_pipeline && python3 -m pytest tests/ -q
+```
+
+## New Environment Knobs
+
+```env
+# Local catalog
+WEBTOON_CATALOG_ENABLED=false
+WEBTOON_CATALOG_FILE=webtoon_catalog.json
+WEBTOON_CATALOG_GENRE_URLS_JSON=["https://www.webtoons.com/en/action", "https://www.webtoons.com/en/romance"]
+WEBTOON_CATALOG_REQUEST_TIMEOUT_SEC=25
+WEBTOON_CATALOG_MAX_TITLES_PER_GENRE=80
+WEBTOON_CATALOG_MAX_EPISODES_PER_TITLE=250
+
+# OpenAI load control
+OPENAI_OCR_BATCH_SIZE=3
+OPENAI_OCR_BATCH_PACE_SEC=0.35
+OPENAI_DIALOGUE_BATCH_SIZE=3
+OPENAI_DIALOGUE_BATCH_PACE_SEC=0.35
 ```

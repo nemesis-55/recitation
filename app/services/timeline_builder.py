@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config import settings
-from app.models.schemas import AudioSegment, PanelAsset, ScriptLine, TimelineEntry
+from app.models.schemas import AudioSegment, PanelAsset, ScriptLine, SrtTimelineLine, TimelineEntry
 
 
 def _clamp_duration(duration: float) -> float:
@@ -75,3 +75,25 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
         item.duration_sec = item.end_sec - item.start_sec
         filtered.append(item)
     return filtered
+
+
+def build_timeline_from_srt(panels: list[PanelAsset], srt_lines: list[SrtTimelineLine]) -> list[TimelineEntry]:
+    if not panels or not srt_lines:
+        return []
+    count = min(len(panels), len(srt_lines))
+    out: list[TimelineEntry] = []
+    for i in range(count):
+        panel = panels[i]
+        line = srt_lines[i]
+        start = max(0.0, float(line.start_sec))
+        end = max(start + 0.05, float(line.end_sec))
+        out.append(
+            TimelineEntry(
+                panel_path=panel.image_path,
+                narration=line.text,
+                start_sec=start,
+                end_sec=end,
+                duration_sec=end - start,
+            )
+        )
+    return out

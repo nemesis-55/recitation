@@ -81,6 +81,32 @@ def _retry_sleep_seconds(exc: Exception, attempt: int) -> float:
     return min(20.0, base + random.uniform(0.05, 0.35))
 
 
+def _is_rate_limited(exc: Exception) -> bool:
+    normalized = str(exc).lower()
+    return "429" in normalized or "rate limit" in normalized or "too many requests" in normalized
+
+
+def _parse_tpm_usage(exc: Exception) -> tuple[int, int, int] | None:
+    # Example snippet:
+    # "TPM): Limit 200000, Used 200000, Requested 3825. Please try again in 1.147s."
+    m = re.search(
+        r"limit\s*([0-9]+)\s*,\s*used\s*([0-9]+)\s*,\s*requested\s*([0-9]+)",
+        str(exc),
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+    try:
+        limit = int(m.group(1))
+        used = int(m.group(2))
+        requested = int(m.group(3))
+    except Exception:
+        return None
+    if limit <= 0:
+        return None
+    return (limit, used, requested)
+
+
 def _read_panel_bytes(panel: PanelAsset) -> bytes:
     path = Path(panel.image_path)
     if not path.exists():
@@ -244,12 +270,14 @@ def extract_text(panel: PanelAsset) -> OcrResult:
 
 
 def _extract_text_batch_once(client: OpenAI, panels: list[dict[str, Any]]) -> list[OcrResult]:
+    expected_len = len(panels)
     prompt = (
-        "You will receive multiple manga panel images.\n"
-        "For each image, extract readable dialogue/captions only.\n"
-        "Return strict JSON array in the same order as images, with objects:\n"
-        '{"text":"...","confidence":0.0}\n'
-        "Confidence must be 0.0 to 1.0. If no text, use empty text and confidence 0.0."
+        "You are an OCR engine for manga panels.\n"
+        f"Return EXACTLY {expected_len} JSON items in the same order as images.\n"
+        'Output only a raw JSON array of objects with keys: "text", "confidence".\n'
+        '"text" is string (empty if no readable text). "confidence" is 0.0..1.0.\n'
+        "No markdown, no prose, no extra keys.\n"
+        '[{"text":"Hello","confidence":0.91},{"text":"","confidence":0.0}]'
     )
     content = [{"type": "input_text", "text": prompt}]
     panel_paths: list[str] = []
@@ -303,6 +331,14 @@ def extract_text_batch(panels: list[PanelAsset]) -> list[OcrResult]:
     current_batch_size = max(min_batch_size, configured_batch_size)
     recovery_cooldown = 0
     success_streak = 0
+    last_openai_request_at = 0.0
+    rate_limit_pressure = 1.0
+    rate_limit_hold_until = 0.0
+    base_request_interval = max(
+        0.0,
+        float(settings.openai_ocr_batch_pace_sec),
+        float(settings.openai_ocr_min_request_interval_sec),
+    )
     logger.info(
         "ocr_engine progress total_panels=%s initial_batch_size=%s",
         len(panels),
@@ -337,15 +373,64 @@ def extract_text_batch(panels: list[PanelAsset]) -> list[OcrResult]:
             continue
         last_error = None
         group_results: Optional[list[OcrResult]] = None
+        should_retry_smaller_batch = False
+        effective_interval = base_request_interval * rate_limit_pressure
+        now = time.time()
+        if rate_limit_hold_until > now:
+            hold_for = rate_limit_hold_until - now
+            logger.info("ocr_engine progress tpm_cooldown_wait_sec=%.2f pressure=%.2f", hold_for, rate_limit_pressure)
+            time.sleep(hold_for)
+        if last_openai_request_at > 0 and effective_interval > 0:
+            elapsed = time.time() - last_openai_request_at
+            if elapsed < effective_interval:
+                wait_for = effective_interval - elapsed
+                logger.info(
+                    "ocr_engine progress adaptive_wait_sec=%.2f pressure=%.2f",
+                    wait_for,
+                    rate_limit_pressure,
+                )
+                time.sleep(wait_for)
         for attempt in range(settings.provider_retries + 1):
             try:
+                last_openai_request_at = time.time()
                 group_results = _extract_text_batch_once(client, uncached)
                 last_error = None
+                rate_limit_pressure = max(1.0, rate_limit_pressure * 0.92)
                 break
             except Exception as exc:
                 last_error = exc
+                last_openai_request_at = time.time()
+                if _is_rate_limited(exc):
+                    rate_limit_pressure = min(8.0, rate_limit_pressure * 1.7)
+                    usage = _parse_tpm_usage(exc)
+                    retry_after = _parse_retry_after_seconds(exc) or 0.0
+                    drain_wait = 0.0
+                    if usage:
+                        limit, used, requested = usage
+                        overflow = max(0, used + requested - limit)
+                        # Convert token overflow to conservative per-minute drain time.
+                        drain_wait = (overflow / max(1.0, float(limit))) * 60.0
+                    cooldown = max(
+                        retry_after * 2.0,
+                        drain_wait + 1.0,
+                        float(settings.openai_ocr_rate_limit_cooldown_sec) * rate_limit_pressure,
+                    )
+                    rate_limit_hold_until = max(rate_limit_hold_until, time.time() + cooldown)
+                    if current_batch_size > min_batch_size:
+                        # Retry same index with a smaller request shape.
+                        current_batch_size = max(min_batch_size, current_batch_size - 1)
+                        success_streak = 0
+                        recovery_cooldown = max(recovery_cooldown, settings.openai_ocr_recovery_batches)
+                        should_retry_smaller_batch = True
                 if attempt < settings.provider_retries:
+                    if should_retry_smaller_batch:
+                        break
                     delay = _retry_sleep_seconds(exc, attempt)
+                    if _is_rate_limited(exc):
+                        delay = max(
+                            delay,
+                            float(settings.openai_ocr_rate_limit_cooldown_sec) * rate_limit_pressure,
+                        )
                     logger.warning(
                         "ocr_engine batch retry attempt=%s batch_size=%s delay_sec=%.2f error=%s",
                         attempt + 1,
@@ -354,12 +439,22 @@ def extract_text_batch(panels: list[PanelAsset]) -> list[OcrResult]:
                         exc,
                     )
                     time.sleep(delay)
+        if should_retry_smaller_batch and group_results is None:
+            logger.warning(
+                "ocr_engine downshift immediate new_batch_size=%s pressure=%.2f",
+                current_batch_size,
+                rate_limit_pressure,
+            )
+            continue
         if group_results is not None:
             final_results.extend(group_results)
             idx += len(panel_group)
             success_streak += 1
             if recovery_cooldown > 0:
                 recovery_cooldown -= 1
+            if success_streak >= max(1, settings.openai_ocr_recovery_batches):
+                # Decay pressure only after sustained clean batches.
+                rate_limit_pressure = max(1.0, rate_limit_pressure * 0.9)
             logger.info(
                 "ocr_engine progress batch_done completed=%s/%s current_batch_size=%s",
                 idx,
@@ -380,11 +475,16 @@ def extract_text_batch(panels: list[PanelAsset]) -> list[OcrResult]:
                 current_batch_size = max(min_batch_size, current_batch_size // 2)
                 success_streak = 0
                 recovery_cooldown = max(recovery_cooldown, settings.openai_ocr_recovery_batches)
-                delay = _retry_sleep_seconds(last_error or RuntimeError("rate limited"), settings.provider_retries)
+                rate_limit_pressure = min(8.0, rate_limit_pressure * 1.7)
+                delay = max(
+                    _retry_sleep_seconds(last_error or RuntimeError("rate limited"), settings.provider_retries),
+                    float(settings.openai_ocr_rate_limit_cooldown_sec) * rate_limit_pressure,
+                )
                 logger.warning(
-                    "ocr_engine downshift batch_size=%s next_delay_sec=%.2f",
+                    "ocr_engine downshift batch_size=%s next_delay_sec=%.2f pressure=%.2f",
                     current_batch_size,
                     delay,
+                    rate_limit_pressure,
                 )
                 time.sleep(delay)
                 continue

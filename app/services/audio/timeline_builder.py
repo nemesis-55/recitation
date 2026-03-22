@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
 class AudioEvent:
-    type: str
+    type: Literal["voice", "pause", "sfx", "music"]
     file: str
     start: float
     duration: float
@@ -23,3 +24,15 @@ def build_timeline(events: list[AudioEvent]) -> list[dict]:
         }
         for e in events
     ]
+
+
+def build_cinematic_timeline(
+    voice_events: list[AudioEvent], sfx_events: list[AudioEvent], music_event: AudioEvent | None = None
+) -> list[AudioEvent]:
+    out: list[AudioEvent] = []
+    out.extend(voice_events)
+    out.extend(sfx_events)
+    if music_event is not None:
+        out.append(music_event)
+    out.sort(key=lambda e: (e.start, 0 if e.type == "music" else 1))
+    return out

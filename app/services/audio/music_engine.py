@@ -1,29 +1,22 @@
 """
-Local / default-BGM beds only (no ElevenLabs music API).
-Pick a loopable file from AUDIO_MUSIC_LOCAL_MAP_JSON or BGM_DEFAULT_PATH.
+Scene-level music generation via ElevenLabs Music API (fatal on provider failure).
 """
 from __future__ import annotations
 
+import email
 import json
+import random
+import time
 from collections import Counter
 from pathlib import Path
+
+import requests
 
 from app.config import settings
 from app.models.schemas import ScriptLine
 from app.services.audio.pause_engine import pause_seconds
-
-
-def _load_local_emotion_paths() -> dict[str, str]:
-    raw = settings.audio_music_local_map_json
-    if not raw or not str(raw).strip():
-        return {}
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return {}
-        return {str(k).strip().lower(): str(v).strip() for k, v in data.items()}
-    except Exception:
-        return {}
+from app.utils.cache_utils import hash_text, read_cache_bytes, write_cache_bytes
+from app.utils.errors import ProviderError
 
 
 def _dominant_emotion(lines: list[ScriptLine]) -> str:
@@ -35,11 +28,11 @@ def _dominant_emotion(lines: list[ScriptLine]) -> str:
 
 
 _EMOTION_LABELS: dict[str, str] = {
-    "sad": "Slow emotional solo piano, cinematic underscore, very sparse, loopable",
-    "fear": "Dark tension drones, subtle strings, loopable",
-    "angry": "Low pulse, action tension, subtle percussion, loopable instrumental",
-    "happy": "Light upbeat ambient bed, soft pads, loopable instrumental",
-    "neutral": "Soft ambient underscore, minimal, loopable instrumental",
+    "sad": "Cinematic cello and felt piano, restrained dynamics, no vocals, loopable underscore",
+    "fear": "Eerie low strings and distant pulses, tense cinematic atmosphere, no vocals, loopable",
+    "angry": "Driving low percussion and aggressive strings, cinematic action tension, no vocals, loopable",
+    "happy": "Warm cinematic plucks and gentle strings, uplifting but subtle, no vocals, loopable",
+    "neutral": "Soft neo-classical ambient underscore with airy pads and light strings, no vocals, loopable",
 }
 
 
@@ -59,29 +52,86 @@ def estimate_script_narration_duration_sec(lines: list[ScriptLine]) -> float:
 
 def resolve_music_bed(lines: list[ScriptLine], audio_dir: Path) -> tuple[Path | None, str, str]:
     """
-    Returns (path_or_none, source, reason) where source is local_map, bgm_default, or none.
+    Returns (path_or_none, source, reason) where source is elevenlabs or none.
     """
-    _ = audio_dir  # reserved for future per-run copied beds
     if not settings.audio_bed_in_narration:
         return None, "none", "audio_bed_in_narration_disabled"
+    if not settings.elevenlabs_music_enabled:
+        return None, "none", "elevenlabs_music_disabled"
 
     emotion = _dominant_emotion(lines)
-    local_map = _load_local_emotion_paths()
-    if emotion in local_map:
-        candidate = Path(local_map[emotion])
-        if not candidate.is_absolute():
-            candidate = Path.cwd() / candidate
-        if candidate.exists():
-            return candidate.resolve(), "local_map", ""
-
-    if settings.audio_use_bgm_default_as_bed and settings.bgm_default_path:
-        bgm = Path(settings.bgm_default_path)
-        if bgm.exists():
-            return bgm.resolve(), "bgm_default", ""
-
-    return None, "none", "no_local_music_or_bgm_default"
+    duration_ms = int(max(3000, min(600000, estimate_script_narration_duration_sec(lines) * 1000)))
+    prompt = music_prompt_for_emotion(emotion)
+    out = audio_dir / "music_scene.mp3"
+    generate_scene_music(prompt=prompt, duration_ms=duration_ms, output_path=out)
+    return out, "elevenlabs", ""
 
 
 def music_prompt_for_emotion(emotion: str) -> str:
-    """Documentation / tests only — no network call."""
     return _EMOTION_LABELS.get((emotion or "neutral").lower(), _EMOTION_LABELS["neutral"])
+
+
+def _extract_audio_from_multipart(content_type: str, body: bytes) -> bytes:
+    """
+    Parse multipart/mixed response; return first audio payload part.
+    """
+    header = f"Content-Type: {content_type}\nMIME-Version: 1.0\n\n".encode("utf-8")
+    msg = email.message_from_bytes(header + body)
+    if not msg.is_multipart():
+        return body
+    for part in msg.walk():
+        ctype = (part.get_content_type() or "").lower()
+        if ctype.startswith("audio/") or ctype in {"application/octet-stream", "binary/octet-stream"}:
+            payload = part.get_payload(decode=True)
+            if payload:
+                return payload
+    raise ValueError("No audio part found in ElevenLabs music multipart response")
+
+
+def generate_scene_music(prompt: str, duration_ms: int, output_path: Path) -> None:
+    if not settings.elevenlabs_music_enabled:
+        raise ProviderError("music_engine", "elevenlabs", "ELEVENLABS_MUSIC_ENABLED is false", "ELEVENLABS_MUSIC_DISABLED")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    safe_ms = int(max(3000, min(600000, duration_ms)))
+    cache_key = hash_text(
+        f"music|{prompt}|{safe_ms}|{settings.elevenlabs_music_model_id}|{settings.elevenlabs_music_output_format}|"
+        f"{settings.elevenlabs_music_force_instrumental}"
+    )
+    cached = read_cache_bytes("elevenlabs_music", cache_key)
+    if cached:
+        output_path.write_bytes(cached)
+        return
+
+    url = f"{settings.elevenlabs_api_base_url.rstrip('/')}/v1/music/detailed?output_format={settings.elevenlabs_music_output_format}"
+    headers = {
+        "xi-api-key": str(settings.elevenlabs_api_key),
+        "Content-Type": "application/json",
+        "Accept": "application/octet-stream",
+    }
+    payload = {
+        "prompt": prompt,
+        "music_length_ms": safe_ms,
+        "model_id": settings.elevenlabs_music_model_id,
+        "force_instrumental": bool(settings.elevenlabs_music_force_instrumental),
+    }
+    for attempt in range(settings.provider_retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=max(settings.provider_timeout_sec, 90))
+            if resp.status_code == 429 and attempt < settings.provider_retries:
+                time.sleep(1.0 * (2**attempt) + random.uniform(0.0, 0.5))
+                continue
+            resp.raise_for_status()
+            ctype = resp.headers.get("Content-Type", "")
+            data = _extract_audio_from_multipart(ctype, resp.content)
+            output_path.write_bytes(data)
+            write_cache_bytes("elevenlabs_music", cache_key, data)
+            return
+        except Exception as exc:
+            if attempt >= settings.provider_retries:
+                raise ProviderError(
+                    "music_engine",
+                    "elevenlabs",
+                    f"ElevenLabs music compose failed: {exc}",
+                    "ELEVENLABS_MUSIC_FAILED",
+                ) from exc
+            time.sleep(0.6 * (attempt + 1))
