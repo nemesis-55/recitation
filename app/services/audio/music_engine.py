@@ -31,6 +31,9 @@ _EMOTION_LABELS: dict[str, str] = {
     "fear": "Eerie low strings and distant pulses, tense cinematic atmosphere, no vocals, loopable",
     "angry": "Driving low percussion and aggressive strings, cinematic action tension, no vocals, loopable",
     "happy": "Warm cinematic plucks and gentle strings, uplifting but subtle, no vocals, loopable",
+    "surprised": "Tense rising strings with sharp accents, cinematic suspense, no vocals, loopable",
+    "curious": "Light investigative pulses with soft pads, cinematic mystery underscore, no vocals, loopable",
+    "confused": "Uncertain ambient textures with subtle dissonance, cinematic unease, no vocals, loopable",
     "neutral": "Soft neo-classical ambient underscore with airy pads and light strings, no vocals, loopable",
 }
 

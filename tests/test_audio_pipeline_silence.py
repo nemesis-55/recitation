@@ -12,6 +12,7 @@ def test_audio_pipeline_uses_silence_for_empty_text(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("app.services.audio.audio_pipeline.analyze_srt_timeline", lambda lines: lines)
     monkeypatch.setattr("app.services.audio.audio_pipeline.get_voice", lambda _sl, _idx: "voice_1")
     monkeypatch.setattr("app.services.audio.audio_pipeline.resolve_music_bed", lambda _script, _audio_dir: (None, "none", "disabled"))
+    monkeypatch.setattr("app.services.audio.audio_pipeline.settings.elevenlabs_sfx_enabled", False)
 
     def _fake_run_ffmpeg(command, stage, timeout_sec=300):
         _ = stage, timeout_sec

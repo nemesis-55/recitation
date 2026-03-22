@@ -28,11 +28,20 @@ _VALID_SPEAKERS = {
     "narrator",
     "unknown_1",
 }
-_VALID_EMOTIONS = {"angry", "sad", "fear", "happy", "neutral"}
+_VALID_EMOTIONS = {"angry", "sad", "fear", "happy", "neutral", "surprised", "curious", "confused"}
 
 
 def estimate_emotion_intensity(text: str, emotion: str) -> float:
-    base = {"angry": 0.75, "sad": 0.55, "fear": 0.7, "happy": 0.65, "neutral": 0.4}.get(emotion, 0.5)
+    base = {
+        "angry": 0.75,
+        "sad": 0.55,
+        "fear": 0.7,
+        "happy": 0.65,
+        "neutral": 0.4,
+        "surprised": 0.72,
+        "curious": 0.52,
+        "confused": 0.58,
+    }.get(emotion, 0.5)
     bonus = 0.0
     if "!" in text:
         bonus += 0.08
@@ -253,7 +262,7 @@ def analyze_srt_timeline(lines: list[SrtTimelineLine]) -> list[SrtTimelineLine]:
             "Return ONLY raw JSON object with key \"analysis\" as an array.\n"
             f"Return exactly {len(chunk)} items in the same order as input lines.\n"
             "Allowed speaker labels: male_1..male_7, female_1..female_3, narrator, unknown_1.\n"
-            "Allowed emotion labels: angry, sad, fear, happy, neutral.\n"
+            "Allowed emotion labels: angry, sad, fear, happy, neutral, surprised, curious, confused.\n"
             "intensity must be float in [0,1].\n"
             "Rules:\n"
             "- Use gendered speaker ids whenever possible (male_* or female_*).\n"

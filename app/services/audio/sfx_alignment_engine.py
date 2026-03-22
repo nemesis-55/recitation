@@ -7,6 +7,7 @@ _KEYWORDS_BY_TYPE: dict[str, tuple[str, ...]] = {
     "impact": ("hit", "punch", "slam", "smash", "strike", "attack"),
     "thump": ("fall", "fell", "drop", "crash", "land"),
     "movement": ("run", "rush", "dash", "footsteps", "move", "movement"),
+    "cough": ("cough", "coughing", "hack"),
     "light_breath": ("gasp", "pant", "breath"),
     "heavy_breath": ("gasp", "pant", "breath"),
 }
@@ -15,6 +16,7 @@ _FILE_BY_TYPE: dict[str, str] = {
     "impact": "impact.mp3",
     "thump": "thump.mp3",
     "movement": "footsteps.mp3",
+    "cough": "cough.mp3",
     "light_breath": "light_breath.mp3",
     "heavy_breath": "heavy_breath.mp3",
 }

@@ -41,7 +41,7 @@ def _fallback_segment(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
     return scenes
 
 
-def _segment_chunk(chunk: list[SrtTimelineLine], expected_total: int) -> list[dict[str, Any]]:
+def _segment_chunk(chunk: list[SrtTimelineLine], chunk_start: int, expected_total: int) -> list[dict[str, Any]]:
     prompt_lines = [f"{ln.index}. [{ln.speaker}|{ln.emotion}] {ln.text}" for ln in chunk]
     prompt = (
         "Segment this episode into coherent scenes based on location, continuous dialogue and character continuity.\n"
@@ -68,6 +68,8 @@ def _segment_chunk(chunk: list[SrtTimelineLine], expected_total: int) -> list[di
     except Exception:
         return _fallback_segment(chunk)
     raw = (getattr(resp, "output_text", None) or "").strip()
+    chunk_lo = int(chunk_start) + 1
+    chunk_hi = int(chunk_start) + len(chunk)
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
@@ -83,12 +85,19 @@ def _segment_chunk(chunk: list[SrtTimelineLine], expected_total: int) -> list[di
                     hi = int(pr[1])
                 except Exception:
                     continue
+                # LLM returns chunk-local ranges; convert to global indices.
                 lo = max(1, lo)
-                hi = min(expected_total, max(lo, hi))
+                hi = max(lo, hi)
+                g_lo = chunk_start + lo
+                g_hi = chunk_start + hi
+                g_lo = max(chunk_lo, min(chunk_hi, g_lo))
+                g_hi = max(g_lo, min(chunk_hi, g_hi))
+                g_lo = max(1, min(expected_total, g_lo))
+                g_hi = max(g_lo, min(expected_total, g_hi))
                 out.append(
                     {
                         "scene_id": int(item.get("scene_id") or i),
-                        "panel_range": [lo, hi],
+                        "panel_range": [g_lo, g_hi],
                         "description": str(item.get("description") or f"scene_{i}"),
                     }
                 )
@@ -152,7 +161,7 @@ def segment_scenes(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
         chunk = lines[start:end]
         if not chunk:
             continue
-        chunk_ranges = _segment_chunk(chunk, expected_total=total)
+        chunk_ranges = _segment_chunk(chunk, chunk_start=start, expected_total=total)
         all_ranges.extend(chunk_ranges)
         if end >= total:
             break

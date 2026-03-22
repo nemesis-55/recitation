@@ -56,34 +56,26 @@ def apply_speech_dynamics(text: str, emotion: str, intensity: float) -> str:
     t = _clamp01(intensity)
     words = cleaned.split(" ")
 
-    out: list[str] = []
-    for i, raw in enumerate(words):
-        w = _stretch_word(raw, emo, t)
-        out.append(w)
-        if i >= len(words) - 1:
-            continue
-        d = _word_delay(w, emo, t)
-        # Broken delivery for fear and gentle trailing for sadness.
-        if emo == "fear" and t >= 0.45 and (i % 3 == 1):
-            d = max(d, 0.28 + (0.12 * t))
-        if emo == "sad" and (i % 4 == 2):
-            d = max(d, 0.24 + (0.1 * t))
-        if emo == "angry":
-            d = min(d, 0.16)
-        out.append(_pause_token(d))
-
-    rendered = "".join(out).strip()
+    out: list[str] = [_stretch_word(raw, emo, t) for raw in words]
+    rendered = " ".join(out).strip()
     if emo == "angry":
-        rendered = re.sub(r"[.]{2,}", "!", rendered)
+        rendered = re.sub(r"[.]{2,}", ".", rendered)
         if t >= 0.65:
             rendered = rendered.upper()
         if rendered and rendered[-1] not in "!?":
             rendered += "!"
+    elif emo == "surprised":
+        if rendered and rendered[-1] not in "!?":
+            rendered += "!"
+    elif emo == "curious":
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "?"
+    elif emo == "confused":
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "?"
     elif emo == "fear":
-        rendered = re.sub(r"\s{2,}", " ", rendered)
-        if t >= 0.6 and not rendered.endswith("..."):
-            rendered += "..."
+        rendered = re.sub(r"\s{2,}", " ", rendered).strip()
     elif emo == "sad":
-        if not rendered.endswith("..."):
-            rendered += "..."
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
     return rendered

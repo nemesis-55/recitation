@@ -25,6 +25,15 @@ def voice_settings_for_emotion(emotion: str, intensity: float, profile: dict | N
     elif emotion == "happy":
         stability = 0.34
         style = 0.58 * intensity
+    elif emotion == "surprised":
+        stability = 0.31
+        style = 0.66 * intensity
+    elif emotion == "curious":
+        stability = 0.47
+        style = 0.32 * intensity
+    elif emotion == "confused":
+        stability = 0.5
+        style = 0.4 * intensity
     settings_out = {
         "stability": max(0.2, min(0.8, round(stability, 3))),
         "similarity_boost": max(0.55, min(0.9, round(similarity, 3))),

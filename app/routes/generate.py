@@ -14,9 +14,10 @@ from app.services.panel_extractor import extract_panels
 from app.services.pdf_loader import load_pdf
 from app.services.preflight import run_preflight, validate_page_resolution
 from app.services.quality_checker import check_video
+from app.services.audio.post_ocr_narration import filter_ocr_narration_and_extract_sfx
 from app.services.subtitle_generator import generate_subtitles, load_srt_timeline
 from app.services.timeline_builder import build_timeline
-from app.services.video_editor import assemble_video
+from app.services.video_editor import assemble_video, split_video_chunks
 from app.services.webtoon_loader import is_webtoon_url, load_webtoon_panels
 from app.utils.errors import PipelineError
 from app.utils.io_utils import create_run_dirs, derive_run_path_from_source, write_json
@@ -63,8 +64,8 @@ def _build_srt_lines_from_ocr(ocr_items, fallback_duration: float = 2.0) -> list
     cursor = 0.0
     for idx, item in enumerate(ocr_items, start=1):
         text = (item.text or "").strip()
-        # Keep silent slots for low-confidence OCR instead of forcing filler speech.
-        if bool(getattr(item, "low_confidence", False)) and len(text) <= 16:
+        # Keep OCR text when present even if confidence is low; only silence true-empty panels.
+        if bool(getattr(item, "low_confidence", False)) and not text:
             text = ""
         # Simple duration heuristic for auto-generated subtitle timing.
         dur = max(0.8, min(8.0, max(fallback_duration, len(text) * 0.055)))
@@ -99,13 +100,43 @@ def _apply_panel_ranges(panels, payload: GenerateRequest) -> tuple[list, dict]:
     if page_range:
         out = [p for p in out if page_range[0] <= int(p.page_index) <= page_range[1]]
     if panel_range:
-        out = [p for p in out if panel_range[0] <= int(p.panel_index) <= panel_range[1]]
+        # Treat panel range as global ordinal over the currently selected panel list.
+        out = [p for i, p in enumerate(out, start=1) if panel_range[0] <= i <= panel_range[1]]
     meta = {
         "requested_page_range": [page_range[0], page_range[1]] if page_range else None,
         "requested_panel_range": [panel_range[0], panel_range[1]] if panel_range else None,
         "selected_panels": len(out),
     }
     return out, meta
+
+
+def _assemble_video_compat(**kwargs):
+    try:
+        return assemble_video(**kwargs)
+    except TypeError:
+        fallback = dict(kwargs)
+        fallback.pop("playback_speed", None)
+        fallback.pop("profile", None)
+        return assemble_video(**fallback)
+
+
+def _remove_file_if_exists(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _prune_final_artifacts(final_dir: Path, keep_paths: set[Path]) -> None:
+    for p in final_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        if p in keep_paths:
+            continue
+        # Keep subtitles for optional post-use; prune render intermediates and duplicate variants.
+        if p.suffix.lower() in {".srt", ".json"}:
+            continue
+        _remove_file_if_exists(p)
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -185,6 +216,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             else:
                 ocr = extract_text_batch(panels)
                 srt_lines = _build_srt_lines_from_ocr(ocr, fallback_duration=max(1.2, settings.min_panel_duration_sec))
+                srt_lines = filter_ocr_narration_and_extract_sfx(srt_lines)
                 if len(srt_lines) > len(panels):
                     srt_lines = srt_lines[: len(panels)]
                 report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": None, "source": "auto_generated_from_ocr"}
@@ -262,6 +294,11 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         with StageTimer(logger, "video_editor"):
             stage_start = time.time()
             final_path = dirs["final"] / "video.mp4"
+            youtube_path = dirs["final"] / "video_youtube.mp4"
+            reels_dir = dirs["final"] / "reels"
+            reel_chunks_dir = reels_dir / "chunks"
+            reels_dir.mkdir(parents=True, exist_ok=True)
+            reel_chunks_dir.mkdir(parents=True, exist_ok=True)
             video_bgm = settings.bgm_default_path
             # Avoid doubling the same default BGM (already mixed under narration when source is bgm_default).
             if (
@@ -269,15 +306,48 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 and settings.audio_bed_in_narration
             ):
                 video_bgm = None
-            final_video = assemble_video(
+            youtube_video = _assemble_video_compat(
+                clips=clips,
+                narration_path=narration_path,
+                output_path=youtube_path,
+                subtitles_path=subtitles_path,
+                bgm_path=video_bgm,
+                playback_speed=1.0,
+                profile="youtube",
+            )
+            final_video = _assemble_video_compat(
                 clips=clips,
                 narration_path=narration_path,
                 output_path=final_path,
                 subtitles_path=subtitles_path,
                 bgm_path=video_bgm,
+                playback_speed=settings.reel_playback_speed,
+                profile="reel",
             )
+            reel_chunks = split_video_chunks(
+                source_video=final_video,
+                output_dir=reel_chunks_dir,
+                max_duration_sec=float(settings.reel_chunk_max_duration_sec),
+            )
+
+            keep_paths = {
+                Path(str(final_video)),
+                Path(str(youtube_video)),
+            }
+            keep_paths.update(reel_chunks)
+            if settings.run_keep_video_intermediates:
+                # Explicit opt-in for debugging/investigation runs.
+                pass
+            else:
+                _prune_final_artifacts(dirs["final"], keep_paths)
             _enforce_stage_timeout("video_editor", stage_start)
-            report["stages"]["video_editor"] = {"video_path": str(final_video)}
+            report["stages"]["video_editor"] = {
+                "video_path": str(final_video),
+                "youtube_video_path": str(youtube_video),
+                "reel_video_path": str(final_video),
+                "reel_chunk_paths": [str(p) for p in reel_chunks],
+                "deliverables": ["video_youtube.mp4", "video.mp4"],
+            }
 
         with StageTimer(logger, "quality_checker"):
             stage_start = time.time()

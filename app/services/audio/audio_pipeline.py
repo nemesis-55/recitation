@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from collections import Counter
@@ -20,6 +22,21 @@ from app.utils.ffmpeg_runner import probe_duration_seconds, run_ffmpeg  # probe 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+_DEBUG_LOG_PATH = Path("/Users/nemesis/Desktop/project/manga_recitation/.cursor/debug-4a522c.log")
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    payload = {
+        "sessionId": "4a522c",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
 def _to_script_line(item: SrtTimelineLine, panel_path: str) -> ScriptLine:
@@ -40,7 +57,20 @@ def run_audio_pipeline(
     logger.info("audio_pipeline start lines=%s panel_paths=%s", len(lines), len(panel_paths))
     analyzed = analyze_srt_timeline(lines)
     scene_meta = analyze_scene(analyzed)
-    scenes = segment_scenes(analyzed)
+    if settings.audio_panel_wise_mode:
+        # Panel-wise mode keeps OCR->panel->audio mapping deterministic and
+        # avoids scene concat truncation by mixing the episode as one timeline.
+        scenes = [
+            {
+                "scene_id": 1,
+                "panel_range": [1, len(analyzed)],
+                "scene_type": str(scene_meta.get("scene_type", "neutral")),
+                "scene_emotion": str(scene_meta.get("scene_emotion", "neutral")),
+                "description": "panel_wise_master_mix",
+            }
+        ]
+    else:
+        scenes = segment_scenes(analyzed)
     episode_state = EpisodeState()
 
     # Assign stable character voices once per episode.
@@ -59,7 +89,7 @@ def run_audio_pipeline(
         emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
         if emo == "angry":
             return "fight"
-        if emo in {"sad", "fear"}:
+        if emo in {"sad", "fear", "surprised", "confused"}:
             return "emotional"
         return "neutral"
 
@@ -69,7 +99,7 @@ def run_audio_pipeline(
             return "neutral"
         counts = Counter(emotions)
         emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        return emo if emo in {"angry", "fear", "sad", "happy", "neutral"} else "neutral"
+        return emo if emo in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"} else "neutral"
 
     def _scene_input(scene: dict) -> tuple[dict, list[SrtTimelineLine], list[str], Path, float, EpisodeState, object, object, object, object]:
         lo, hi = int(scene["panel_range"][0]), int(scene["panel_range"][1])
@@ -82,7 +112,7 @@ def run_audio_pipeline(
         if scene_type not in {"fight", "emotional", "neutral"}:
             scene_type = _derive_scene_type(chunk)
         scene_emotion = str(scene.get("scene_emotion", "")).strip().lower()
-        if scene_emotion not in {"angry", "fear", "sad", "happy", "neutral"}:
+        if scene_emotion not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
             scene_emotion = _derive_scene_emotion(chunk)
         scene["scene_type"] = scene_type
         scene["scene_emotion"] = scene_emotion
@@ -93,6 +123,8 @@ def run_audio_pipeline(
 
     scene_inputs = [_scene_input(scene) for scene in scenes]
     max_workers = max(1, min(4, len(scene_inputs)))
+    if settings.audio_panel_wise_mode:
+        max_workers = 1
     if max_workers == 1:
         scene_results = [process_scene(*inp) for inp in scene_inputs]
     else:
@@ -100,6 +132,19 @@ def run_audio_pipeline(
             scene_results = list(pool.map(lambda args: process_scene(*args), scene_inputs))
 
     scene_results.sort(key=lambda x: int(x.get("scene_id", 0)))
+    # region agent log
+    _debug_log(
+        run_id="pre-fix-1",
+        hypothesis_id="H4",
+        location="audio_pipeline.py:run_audio_pipeline",
+        message="Scene results summary",
+        data={
+            "scene_count": len(scene_results),
+            "scene_audio_files": [str(sr.get("audio")) for sr in scene_results],
+            "scene_declared_durations": [float(sr.get("duration", 0.0)) for sr in scene_results],
+        },
+    )
+    # endregion
     scene_audio_files = [str(Path(sr["audio"]).resolve()) for sr in scene_results]
     narration_path = audio_dir / "narration.mp3"
     if len(scene_audio_files) == 1:
@@ -154,7 +199,14 @@ def run_audio_pipeline(
                     rendered_text=seg.rendered_text,
                 )
             )
-        scene_offset += float(sr.get("duration", 0.0))
+        scene_duration = float(sr.get("duration", 0.0))
+        scene_audio_file = sr.get("audio")
+        if scene_audio_file:
+            try:
+                scene_duration = max(scene_duration, float(probe_duration_seconds(Path(str(scene_audio_file)))))
+            except Exception:
+                pass
+        scene_offset += scene_duration
         line_cursor += len(sr.get("segments", []))
 
     audio_meta = {
@@ -162,6 +214,7 @@ def run_audio_pipeline(
         "narration_music_reason": "scene_processing",
         "sfx_source": "enabled" if settings.elevenlabs_sfx_enabled else "disabled",
         "quality": "cinematic",
+        "audio_mode": "panel_wise_single_mix" if settings.audio_panel_wise_mode else "scene_chunked",
         "scene_type": str(scene_meta.get("scene_type", "neutral")),
         "scene_emotion": str(scene_meta.get("scene_emotion", "neutral")),
         "characters": list(episode_state.characters.values()),

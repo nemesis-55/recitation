@@ -17,7 +17,11 @@ def _fallback_scene(lines: list[SrtTimelineLine]) -> dict:
         scene_emotion = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
     else:
         scene_emotion = "neutral"
-    scene_type = "fight" if scene_emotion == "angry" else ("emotional" if scene_emotion in {"sad", "fear"} else "neutral")
+    scene_type = (
+        "fight"
+        if scene_emotion == "angry"
+        else ("emotional" if scene_emotion in {"sad", "fear", "surprised", "confused"} else "neutral")
+    )
     uniq = []
     for sp in speakers:
         if sp and sp not in uniq:
@@ -48,7 +52,7 @@ def analyze_scene(lines: list[SrtTimelineLine]) -> dict:
     prompt = (
         "Analyze this subtitle chunk and return ONLY raw JSON object with keys: characters, scene_type, scene_emotion.\n"
         "scene_type must be one of: fight, emotional, neutral.\n"
-        "scene_emotion must be one of: angry, fear, sad, neutral, happy.\n"
+        "scene_emotion must be one of: angry, fear, sad, neutral, happy, surprised, curious, confused.\n"
         "characters must be array of objects: {id, speaker, gender, personality, voice_style}.\n"
         "No markdown.\n"
         "Lines:\n" + "\n".join(payload_lines)
@@ -68,7 +72,7 @@ def analyze_scene(lines: list[SrtTimelineLine]) -> dict:
             if scene_type not in {"fight", "emotional", "neutral"}:
                 scene_type = "neutral"
             scene_emotion = str(parsed.get("scene_emotion", "neutral")).strip().lower()
-            if scene_emotion not in {"angry", "fear", "sad", "neutral", "happy"}:
+            if scene_emotion not in {"angry", "fear", "sad", "neutral", "happy", "surprised", "curious", "confused"}:
                 scene_emotion = "neutral"
             chars = parsed.get("characters")
             if not isinstance(chars, list):

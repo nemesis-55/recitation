@@ -22,6 +22,24 @@ from app.utils.ffmpeg_runner import probe_duration_seconds
 from app.services.audio.episode_state import EpisodeState
 
 
+_SFX_PROMPTS: dict[str, str] = {
+    "impact": "Cinematic impact hit, tight transient and deep thump",
+    "thump": "Body thump impact, low-frequency floor hit",
+    "movement": "Fast cloth movement whoosh, short pass-by",
+    "cough": "Short dry cough vocal effect, natural and clean, no words",
+}
+
+
+def _merge_sfx_plan(rule_sfx: list[str], explicit_sfx: list[str]) -> list[str]:
+    allowed = {"impact", "thump", "movement", "cough"}
+    out: list[str] = []
+    for evt in explicit_sfx + rule_sfx:
+        e = str(evt).strip().lower()
+        if e in allowed and e in _SFX_PROMPTS and e not in out:
+            out.append(e)
+    return out
+
+
 def _dominant_music_type(values: list[str]) -> str | None:
     clean = [str(v).strip().lower() for v in values if str(v).strip()]
     if not clean:
@@ -76,6 +94,7 @@ def process_scene(
     prev_pause = 0.0
     music_type_votes: list[str] = []
 
+    max_refine_lines = max(0, int(settings.openai_emotion_refine_max_lines))
     for idx, line in enumerate(scene_lines):
         panel_path = scene_panel_paths[min(idx, max(0, len(scene_panel_paths) - 1))]
         sl = _to_script_line(line, panel_path=panel_path)
@@ -84,12 +103,15 @@ def process_scene(
         base_emotion = str(sl.emotion or "neutral").lower()
         base_intensity = float(sl.emotion_intensity or 0.5)
         scene_emotion = str(scene.get("scene_emotion", "neutral")).lower()
-        refined_emotion, refined_intensity = analyze_emotion(
-            sl.narration,
-            scene_emotion,
-            base_emotion,
-            base_intensity,
-        )
+        if idx < max_refine_lines and (sl.narration or "").strip():
+            refined_emotion, refined_intensity = analyze_emotion(
+                sl.narration,
+                scene_emotion,
+                base_emotion,
+                base_intensity,
+            )
+        else:
+            refined_emotion, refined_intensity = base_emotion, base_intensity
         curve = _scene_curve_value(idx, len(scene_lines))
         effective_intensity = _clamp01((float(refined_intensity) * 0.65) + (curve * 0.35))
         sl.emotion = refined_emotion
@@ -130,16 +152,12 @@ def process_scene(
             voice_dur = slot_dur
         voice_events.append(AudioEvent(type="voice", file=str(voice_path), start=start, duration=voice_dur, line_index=idx))
 
-        if settings.elevenlabs_sfx_enabled:
-            sfx_limit = 1 if curve < 0.55 else 2
-            for sfx_i, evt in enumerate(plan.get("sfx_plan", [])[:sfx_limit], start=1):
-                prompt = {
-                    "impact": "Cinematic impact hit, tight transient and deep thump",
-                    "thump": "Body thump impact, low-frequency floor hit",
-                    "movement": "Fast cloth movement whoosh, short pass-by",
-                    "light_breath": "Subtle anxious breath close mic",
-                    "heavy_breath": "Heavy breath under stress close mic",
-                }.get(str(evt), "")
+        explicit_sfx = [str(x).strip().lower() for x in (line.sfx_cues or []) if str(x).strip()]
+        merged_sfx = _merge_sfx_plan(list(plan.get("sfx_plan", [])), explicit_sfx)
+        if settings.elevenlabs_sfx_enabled and merged_sfx:
+            sfx_limit = max(1 if curve < 0.55 else 2, len(explicit_sfx))
+            for sfx_i, evt in enumerate(merged_sfx[:sfx_limit], start=1):
+                prompt = _SFX_PROMPTS.get(str(evt), "")
                 if not prompt:
                     continue
                 sfx_path = scene_audio_dir / f"sfx_{idx:03d}_{sfx_i}.mp3"
@@ -166,12 +184,17 @@ def process_scene(
                 start_sec=start,
                 end_sec=start + voice_dur,
                 duration_sec=voice_dur,
-                pause_sec=max(0.0, slot_dur - voice_dur),
+                pause_sec=0.0,
                 provider="elevenlabs",
                 voice=sl.voice,
                 rendered_text=sl.rendered_text,
             )
         )
+
+    # Persist actual inter-line silence into segment metadata for timeline parity.
+    for i in range(max(0, len(segments) - 1)):
+        gap = max(0.0, float(segments[i + 1].start_sec) - float(segments[i].end_sec))
+        segments[i].pause_sec = gap
 
     scene_music_type = _dominant_music_type(music_type_votes)
     try:
@@ -183,7 +206,9 @@ def process_scene(
     events = build_cinematic_timeline(voice_events, sfx_events, music_event)
     narration_path = scene_audio_dir / f"scene_{int(scene.get('scene_id', 0)):03d}.mp3"
     mix_func(events, narration_path, scene_audio_dir)
-    duration = max(0.0, max((e.start + e.duration for e in voice_events), default=0.0))
+    voice_tail = max((float(s.end_sec) + float(s.pause_sec) for s in segments), default=0.0)
+    sfx_tail = max((float(e.start) + float(e.duration) for e in sfx_events), default=0.0)
+    duration = max(0.0, voice_tail, sfx_tail)
     return {
         "scene_id": int(scene.get("scene_id", 0)),
         "audio": str(narration_path),

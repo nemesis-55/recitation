@@ -5,6 +5,9 @@ import json
 from openai import OpenAI
 
 from app.config import settings
+from app.utils.cache_utils import hash_text, read_cache_json, write_cache_json
+
+
 def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default_intensity: float) -> tuple[str, float]:
     base_emotion = (default_emotion or "neutral").lower()
     base_intensity = max(0.0, min(1.0, float(default_intensity)))
@@ -13,10 +16,35 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
     if not settings.openai_dialogue_analysis_enabled or not settings.openai_api_key:
         return base_emotion, base_intensity
 
+    cache_key = hash_text(
+        json.dumps(
+            {
+                "text": text,
+                "scene_emotion": scene_emotion,
+                "default_emotion": base_emotion,
+                "default_intensity": round(base_intensity, 3),
+                "model": settings.openai_dialogue_analysis_model or settings.openai_model,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    )
+    cached = read_cache_json("emotion_engine", cache_key)
+    if isinstance(cached, dict):
+        try:
+            emo = str(cached.get("emotion", base_emotion)).strip().lower()
+            if emo not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
+                emo = base_emotion
+            inten = float(cached.get("intensity", base_intensity))
+            inten = max(0.0, min(1.0, inten))
+            return emo, inten
+        except Exception:
+            pass
+
     prompt = (
         "Classify the line emotion for performance.\n"
         "Return ONLY raw JSON with keys emotion and intensity.\n"
-        "emotion must be one of: angry, fear, sad, happy, neutral.\n"
+        "emotion must be one of: angry, fear, sad, happy, neutral, surprised, curious, confused.\n"
         "intensity must be float 0..1.\n"
         f"scene_emotion: {scene_emotion}\n"
         f"line: {text}"
@@ -33,10 +61,11 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
     try:
         parsed = json.loads(raw)
         emo = str(parsed.get("emotion", base_emotion)).strip().lower()
-        if emo not in {"angry", "fear", "sad", "happy", "neutral"}:
+        if emo not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
             emo = base_emotion
         inten = float(parsed.get("intensity", base_intensity))
         inten = max(0.0, min(1.0, inten))
+        write_cache_json("emotion_engine", cache_key, {"emotion": emo, "intensity": inten})
         return emo, inten
     except Exception:
         return base_emotion, base_intensity

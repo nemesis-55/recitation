@@ -17,11 +17,14 @@ class EmotionRule:
 
 
 EMOTION_RULES: dict[str, EmotionRule] = {
-    "angry": EmotionRule(0.25, 0.35, 1.10, "uppercase_exclaim", ("impact",), 2, "intense", 0.15, 0.35),
-    "fear": EmotionRule(0.40, 0.55, 0.90, "broken_pause", ("light_breath", "heavy_breath"), 2, "tension", 0.50, 1.00),
-    "sad": EmotionRule(0.50, 0.65, 0.85, "trailing_pause", (), 0, "piano", 0.60, 1.00),
-    "happy": EmotionRule(0.32, 0.45, 1.03, "none", (), 0, "uplift", 0.22, 0.40),
-    "neutral": EmotionRule(0.45, 0.55, 1.00, "none", (), 0, "ambient", 0.30, 0.40),
+    "angry": EmotionRule(0.25, 0.35, 1.08, "uppercase_exclaim", ("impact",), 1, "intense", 0.10, 0.22),
+    "fear": EmotionRule(0.40, 0.55, 0.94, "broken_pause", ("movement",), 1, "tension", 0.18, 0.30),
+    "sad": EmotionRule(0.50, 0.65, 0.90, "trailing_pause", (), 0, "piano", 0.20, 0.34),
+    "happy": EmotionRule(0.32, 0.45, 1.02, "none", (), 0, "uplift", 0.12, 0.22),
+    "neutral": EmotionRule(0.45, 0.55, 1.00, "none", (), 0, "ambient", 0.12, 0.20),
+    "surprised": EmotionRule(0.30, 0.42, 1.07, "uppercase_exclaim", ("impact",), 1, "tension", 0.10, 0.18),
+    "curious": EmotionRule(0.42, 0.54, 0.98, "none", (), 0, "ambient", 0.14, 0.24),
+    "confused": EmotionRule(0.44, 0.58, 0.95, "broken_pause", ("movement",), 1, "tension", 0.16, 0.28),
 }
 
 
@@ -49,14 +52,14 @@ def resolve_audio_plan(text: str, emotion: str, intensity: float, scene_type: st
     scene = (scene_type or "neutral").lower()
     if scene == "fight":
         speed = min(1.18, speed + 0.04)
-        pause = max(0.10, pause - 0.08)
+        pause = max(0.08, pause - 0.05)
         if "impact" not in sfx_types:
             sfx_types = ["impact", *sfx_types]
         sfx_max = max(sfx_max, 1)
         music_type = "intense"
     elif scene == "emotional":
-        pause = min(1.20, pause + 0.10)
-        if emo in {"sad", "fear"}:
+        pause = min(0.45, pause + 0.04)
+        if emo in {"sad", "fear", "confused"}:
             music_type = "piano" if emo == "sad" else "tension"
 
     return {

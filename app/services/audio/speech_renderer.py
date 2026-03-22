@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.config import settings
 from app.services.audio.speech_dynamics_engine import apply_speech_dynamics
 
 
@@ -59,6 +60,8 @@ def _to_third_person(text: str) -> str:
 
 
 def _scene_bridge(text: str, emotion: str, intensity: float) -> str:
+    if not settings.audio_scene_bridge_enabled:
+        return ""
     for pattern, line in _SCENE_BRIDGES:
         if pattern.search(text):
             return line
@@ -93,11 +96,13 @@ def _apply_speech_mode(cleaned: str, mode: str) -> str:
             out += "!"
         return out
     if m == "broken_pause":
-        return "... " + cleaned.replace(" ", "... ")
+        parts = re.split(r"([,;:.!?])", cleaned)
+        rebuilt = "".join(parts).strip()
+        return rebuilt.replace(",", ", ").replace("  ", " ")
     if m == "trailing_pause":
-        if cleaned.endswith("..."):
+        if cleaned.endswith("."):
             return cleaned
-        return f"{cleaned}..."
+        return f"{cleaned}."
     return cleaned
 
 

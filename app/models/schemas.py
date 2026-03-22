@@ -101,6 +101,7 @@ class SrtTimelineLine(BaseModel):
     intensity: float = 0.5
     performance_text: Optional[str] = None
     panel_path: Optional[str] = None
+    sfx_cues: list[str] = Field(default_factory=list)
 
 
 class CinematicAudioResponse(BaseModel):

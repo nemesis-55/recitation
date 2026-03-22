@@ -5,8 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.schemas import AudioSegment, OcrResult, PageAsset, PanelAsset, QualityReport, SrtTimelineLine, TimelineEntry
-from app.routes.generate import _build_srt_lines_from_ocr
+from app.models.schemas import AudioSegment, GenerateRequest, OcrResult, PageAsset, PanelAsset, QualityReport, SrtTimelineLine, TimelineEntry
+from app.routes.generate import _apply_panel_ranges, _build_srt_lines_from_ocr
 
 
 def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
@@ -97,6 +97,7 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("app.routes.generate.build_timeline", _fake_timeline_from_audio)
     monkeypatch.setattr("app.routes.generate.animate_panel", _fake_animate)
     monkeypatch.setattr("app.routes.generate.assemble_video", _fake_assemble)
+    monkeypatch.setattr("app.routes.generate.split_video_chunks", lambda source_video, output_dir, max_duration_sec: [])
     monkeypatch.setattr("app.routes.generate.check_video", _fake_check)
     monkeypatch.setattr("app.routes.generate.create_run_dirs", lambda job_id=None: dirs)
 
@@ -197,6 +198,7 @@ def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path
         "app.routes.generate.assemble_video",
         lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None: (output_path.write_bytes(b"video"), output_path)[1],
     )
+    monkeypatch.setattr("app.routes.generate.split_video_chunks", lambda source_video, output_dir, max_duration_sec: [])
     monkeypatch.setattr(
         "app.routes.generate.check_video",
         lambda _video_path: QualityReport(
@@ -285,6 +287,7 @@ def test_generate_pipeline_prefers_provided_srt(monkeypatch, tmp_path: Path):
         "app.routes.generate.assemble_video",
         lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None: (output_path.write_bytes(b"video"), output_path)[1],
     )
+    monkeypatch.setattr("app.routes.generate.split_video_chunks", lambda source_video, output_dir, max_duration_sec: [])
     monkeypatch.setattr(
         "app.routes.generate.check_video",
         lambda _video_path: QualityReport(
@@ -297,3 +300,16 @@ def test_generate_pipeline_prefers_provided_srt(monkeypatch, tmp_path: Path):
     res = client.post("/generate", json={"pdf_path": "/tmp/in.pdf", "srt_path": "/tmp/in.srt"})
     assert res.status_code == 200
     assert res.json()["status"] == "completed"
+
+
+def test_apply_panel_range_uses_global_ordinal_after_page_filter():
+    panels = [
+        PanelAsset(page_index=1, panel_index=1, image_path="p1", bbox=(0, 0, 1, 1), confidence=1.0),
+        PanelAsset(page_index=1, panel_index=2, image_path="p2", bbox=(0, 0, 1, 1), confidence=1.0),
+        PanelAsset(page_index=2, panel_index=1, image_path="p3", bbox=(0, 0, 1, 1), confidence=1.0),
+        PanelAsset(page_index=2, panel_index=2, image_path="p4", bbox=(0, 0, 1, 1), confidence=1.0),
+    ]
+    req = GenerateRequest(pdf_path="/tmp/x.pdf", panel_from=2, panel_to=3)
+    selected, meta = _apply_panel_ranges(panels, req)
+    assert [p.image_path for p in selected] == ["p2", "p3"]
+    assert meta["selected_panels"] == 2
