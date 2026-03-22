@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.schemas import AudioSegment, OcrResult, PageAsset, PanelAsset, QualityReport, SrtTimelineLine, TimelineEntry
+from app.models.schemas import AudioSegment, OcrResult, PageAsset, PanelAsset, QualityReport, TimelineEntry
 from app.routes.generate import _build_srt_lines_from_ocr
 
 
@@ -34,8 +34,8 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     def _fake_extract_panels(_page, _panels_dir: Path):
         return [PanelAsset(page_index=0, panel_index=0, image_path=str(panel_img), bbox=(0, 0, 10, 10), confidence=1.0)]
 
-    def _fake_load_srt(_path: str):
-        return [SrtTimelineLine(index=1, start_sec=0.0, end_sec=2.0, text="Hello there")]
+    def _fake_extract_text_batch(_panels):
+        return [OcrResult(panel_path=str(panel_img), text="Hello there", confidence=0.98, low_confidence=False)]
 
     def _fake_generate_voice(_srt_lines, _panel_paths, audio_dir: Path):
         narration = audio_dir / "narration.mp3"
@@ -92,7 +92,7 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("app.routes.generate.is_webtoon_url", lambda _x: False)
     monkeypatch.setattr("app.routes.generate.load_pdf", _fake_load_pdf)
     monkeypatch.setattr("app.routes.generate.extract_panels", _fake_extract_panels)
-    monkeypatch.setattr("app.routes.generate.load_srt_timeline", _fake_load_srt)
+    monkeypatch.setattr("app.routes.generate.extract_text_batch", _fake_extract_text_batch)
     monkeypatch.setattr("app.routes.generate.generate_voice", _fake_generate_voice)
     monkeypatch.setattr("app.routes.generate.build_timeline", _fake_timeline_from_audio)
     monkeypatch.setattr("app.routes.generate.animate_panel", _fake_animate)
@@ -103,7 +103,7 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     client = TestClient(app)
     res = client.post(
         "/generate",
-        json={"pdf_path": "/tmp/input.pdf", "srt_path": "/tmp/input.srt", "subtitles": True},
+        json={"pdf_path": "/tmp/input.pdf"},
     )
     assert res.status_code == 200
     payload = res.json()
@@ -150,11 +150,11 @@ def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path
         ],
     )
     monkeypatch.setattr(
-        "app.routes.generate.load_srt_timeline",
-        lambda _path: [
-            SrtTimelineLine(index=1, start_sec=0.0, end_sec=1.0, text="one"),
-            SrtTimelineLine(index=2, start_sec=1.0, end_sec=2.0, text="two"),
-            SrtTimelineLine(index=3, start_sec=2.0, end_sec=3.0, text="three"),
+        "app.routes.generate.extract_text_batch",
+        lambda _panels: [
+            OcrResult(panel_path=str(panel_a), text="one", confidence=0.98, low_confidence=False),
+            OcrResult(panel_path=str(panel_b), text="two", confidence=0.98, low_confidence=False),
+            OcrResult(panel_path=str(panel_c), text="three", confidence=0.98, low_confidence=False),
         ],
     )
 
@@ -210,8 +210,6 @@ def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path
         "/generate",
         json={
             "pdf_path": "/tmp/input.pdf",
-            "srt_path": "/tmp/input.srt",
-            "subtitles": True,
             "page_from": 1,
             "page_to": 1,
             "panel_from": 2,

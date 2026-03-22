@@ -39,41 +39,6 @@
           <div id="episode-picker" style="max-height:170px;overflow:auto;border:1px solid #2c313a;border-radius:8px;padding:8px;margin-top:6px;">
             <small style="color:#9ca3af;">Pick title to load episode checkboxes.</small>
           </div>
-          <button id="generate-range" type="button">Generate Episode Range</button>
-          <small id="panel-filter-note" style="display:block;color:#9ca3af;margin-top:6px;">
-            Page/Panel filters are applied only when exactly one episode is selected.
-          </small>
-          <pre id="range-result"></pre>
-        </div>
-        <form id="gen-form">
-          <label>Source (PDF path or Webtoon URL)</label>
-          <input
-            id="pdf_path"
-            type="text"
-            placeholder="/absolute/path/to/manga.pdf or https://www.webtoons.com/..."
-            required
-          />
-          <small style="color:#9ca3af;display:block;margin-top:6px;">
-            Use a local PDF path or a Webtoon episode URL. The backend auto-detects the source type.
-          </small>
-          <label>SRT Path (optional)</label>
-          <input
-            id="srt_path"
-            type="text"
-            placeholder="/absolute/path/to/subtitles.srt (leave empty: AI auto-generates from OCR)"
-          />
-          <small style="color:#9ca3af;display:block;margin-top:6px;">
-            If empty, the pipeline auto-generates subtitle timing/text from OCR.
-          </small>
-          <label>Subtitles</label>
-          <select id="subtitles">
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
-          <label>Target Duration (optional, 30-180)</label>
-          <input id="target_duration_sec" type="number" min="30" max="180" />
-          <label>Max Panels to Evaluate (optional, 1-500)</label>
-          <input id="max_panels" type="number" min="1" max="500" />
           <label>Page Range (optional)</label>
           <div style="display:flex;gap:10px;">
             <input id="page_from" type="number" min="0" placeholder="page from" />
@@ -84,15 +49,13 @@
             <input id="panel_from" type="number" min="0" placeholder="panel from" />
             <input id="panel_to" type="number" min="0" placeholder="panel to" />
           </div>
-          <label>Final Video BGM Override (optional)</label>
-          <input id="bgm_path" type="text" placeholder="/path/to/custom-bgm.mp3 (leave empty: auto music only)" />
-          <small style="color:#9ca3af;display:block;margin-top:6px;">
-            Usually leave empty. The cinematic engine already generates scene music automatically.
+          <button id="generate-range" type="button">Generate Episode Range</button>
+          <small id="panel-filter-note" style="display:block;color:#9ca3af;margin-top:6px;">
+            Page/Panel filters are applied only when exactly one episode is selected.
           </small>
-          <button type="submit">Generate Video</button>
-        </form>
+          <pre id="range-result"></pre>
+        </div>
         <div id="form-error" class="inline-error hidden"></div>
-        <pre id="job-result"></pre>
       </section>
 
       <section class="card">
@@ -129,6 +92,14 @@
         <div id="run-summary" class="run-summary"></div>
         <div id="detail-error" class="inline-error hidden"></div>
         <pre id="run-detail">Select a run to inspect stage-level report.</pre>
+      </section>
+
+      <section class="card full">
+        <h2>Video Planner & Step Visualizer</h2>
+        <p class="subtle">See stage-by-stage execution and status for the selected run.</p>
+        <div id="step-visualizer" class="step-visualizer">
+          <div class="narration-empty">Select a run to view planner steps.</div>
+        </div>
       </section>
 
       <section class="card full">
@@ -242,6 +213,10 @@
           "episode_from",
           "episode_to",
           "episode_select_all",
+          "page_from",
+          "page_to",
+          "panel_from",
+          "panel_to",
           "generate-range"
         ];
         for (const id of ids) {
@@ -336,6 +311,7 @@
           ? `FAILED at ${data.report.failed.stage} (${data.report.failed.error_code || "error"})`
           : "Ready";
         document.getElementById("run-summary").textContent = `${runId} • ${summary}`;
+        renderStepVisualizer(data);
         renderNarration(data);
         const video = document.getElementById("run-video");
         if (data?.files?.video) {
@@ -372,6 +348,51 @@
         }
       }
 
+      function renderStepVisualizer(data) {
+        const box = document.getElementById("step-visualizer");
+        const report = data?.report || {};
+        const stages = report?.stages || {};
+        const failedStage = report?.failed?.stage || "";
+        const stageOrder = [
+          "preflight",
+          "webtoon_loader",
+          "pdf_loader",
+          "panel_extractor",
+          "panel_filter",
+          "panel_limit",
+          "panel_qa",
+          "srt_loader",
+          "narrator",
+          "timeline_builder",
+          "panel_animator",
+          "subtitle_generator",
+          "video_editor",
+          "quality_checker"
+        ];
+        box.innerHTML = "";
+        if (!stages || Object.keys(stages).length === 0) {
+          box.innerHTML = `<div class="narration-empty">No stage data yet.</div>`;
+          return;
+        }
+        for (const name of stageOrder) {
+          const data = stages[name];
+          let status = "pending";
+          if (data) status = "done";
+          if (failedStage && failedStage === name) status = "failed";
+          const card = document.createElement("article");
+          card.className = `step-card step-${status}`;
+          const elapsed = Number(data?.elapsed_ms || 0);
+          card.innerHTML = `
+            <header>
+              <strong>${name}</strong>
+              <span class="status status-${status}">${status}</span>
+            </header>
+            <small>${elapsed > 0 ? `elapsed: ${elapsed} ms` : "elapsed: -"}</small>
+          `;
+          box.appendChild(card);
+        }
+      }
+
       document.getElementById("refresh-runs").addEventListener("click", async () => {
         try {
           await fetchRuns();
@@ -404,53 +425,6 @@
         }
       });
 
-      document.getElementById("gen-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const payload = {
-          pdf_path: document.getElementById("pdf_path").value,
-          srt_path: document.getElementById("srt_path").value,
-          subtitles: document.getElementById("subtitles").value === "true"
-        };
-        const target = document.getElementById("target_duration_sec").value;
-        const maxPanels = document.getElementById("max_panels").value;
-        const pageFrom = document.getElementById("page_from").value;
-        const pageTo = document.getElementById("page_to").value;
-        const panelFrom = document.getElementById("panel_from").value;
-        const panelTo = document.getElementById("panel_to").value;
-        const bgm = document.getElementById("bgm_path").value;
-        if (target) payload.target_duration_sec = Number(target);
-        if (maxPanels) payload.max_panels = Number(maxPanels);
-        if (pageFrom) payload.page_from = Number(pageFrom);
-        if (pageTo) payload.page_to = Number(pageTo);
-        if (panelFrom) payload.panel_from = Number(panelFrom);
-        if (panelTo) payload.panel_to = Number(panelTo);
-        if (bgm) payload.bgm_path = bgm;
-
-        const out = document.getElementById("job-result");
-        setError("form-error", "");
-        out.textContent = "Running...";
-        if (!payload.pdf_path) {
-          setError("form-error", "Source is required.");
-          return;
-        }
-        try {
-          const data = await fetchJson("/ops/api/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-          out.textContent = JSON.stringify(data, null, 2);
-          await fetchRuns();
-          if (data?.report_path) {
-            const runHint = data.report_path.split("/runs/")[1]?.split("/meta/")[0];
-            if (runHint) inspectRun(runHint).catch((err) => setError("detail-error", String(err)));
-          }
-        } catch (err) {
-          out.textContent = "";
-          setError("form-error", String(err));
-        }
-      });
-
       document.getElementById("catalog-search").addEventListener("click", () => {
         searchCatalog().catch((err) => setError("detail-error", String(err)));
       });
@@ -480,10 +454,6 @@
           if (episodes.length > 0) {
             document.getElementById("episode_from").value = String(episodes[0].episode_no || 0);
             document.getElementById("episode_to").value = String(episodes[episodes.length - 1].episode_no || 0);
-            const firstUrl = episodes[0].viewer_url || "";
-            if (firstUrl) {
-              document.getElementById("pdf_path").value = firstUrl;
-            }
           }
         } catch (err) {
           setError("detail-error", String(err));
@@ -508,8 +478,7 @@
         const selectedNos = selectedEpisodeNumbers();
         const selectAll = document.getElementById("episode_select_all").checked;
         const payload = {
-          title_slug,
-          subtitles: document.getElementById("subtitles").value === "true"
+          title_slug
         };
         if (selectAll) {
           payload.select_all_episodes = true;
@@ -523,14 +492,10 @@
           payload.episode_from = Number(fromV);
           payload.episode_to = Number(toV);
         }
-        const target = document.getElementById("target_duration_sec").value;
-        const maxPanels = document.getElementById("max_panels").value;
         const pageFrom = document.getElementById("page_from").value;
         const pageTo = document.getElementById("page_to").value;
         const panelFrom = document.getElementById("panel_from").value;
         const panelTo = document.getElementById("panel_to").value;
-        const bgm = document.getElementById("bgm_path").value;
-        const srt = document.getElementById("srt_path").value;
         const rangeCountHint =
           selectAll ? (titleEpisodes?.length || 2) :
           selectedNos.length > 0 ? selectedNos.length :
@@ -539,14 +504,10 @@
           setError("detail-error", "Page/Panel filters work only when exactly one episode is selected.");
           return;
         }
-        if (target) payload.target_duration_sec = Number(target);
-        if (maxPanels) payload.max_panels = Number(maxPanels);
         if (pageFrom) payload.page_from = Number(pageFrom);
         if (pageTo) payload.page_to = Number(pageTo);
         if (panelFrom) payload.panel_from = Number(panelFrom);
         if (panelTo) payload.panel_to = Number(panelTo);
-        if (bgm) payload.bgm_path = bgm;
-        if (srt) payload.srt_path = srt;
         const out = document.getElementById("range-result");
         out.textContent = "Queue running...";
         try {

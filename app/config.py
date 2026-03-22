@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     audio_strict_per_line_tts: bool = Field(default=False, alias="AUDIO_STRICT_PER_LINE_TTS")
     audio_group_max_chars: int = Field(default=220, alias="AUDIO_GROUP_MAX_CHARS")
     elevenlabs_voice_map_json: Optional[str] = Field(default=None, alias="ELEVENLABS_VOICE_MAP_JSON")
+    elevenlabs_character_profiles_json: Optional[str] = Field(default=None, alias="ELEVENLABS_CHARACTER_PROFILES_JSON")
 
     stage_timeout_sec: int = Field(default=300, alias="STAGE_TIMEOUT_SEC")
     provider_timeout_sec: int = Field(default=60, alias="PROVIDER_TIMEOUT_SEC")
@@ -107,6 +108,9 @@ class Settings(BaseSettings):
     openai_dialogue_min_request_interval_sec: float = Field(default=0.55, alias="OPENAI_DIALOGUE_MIN_REQUEST_INTERVAL_SEC")
     openai_dialogue_rate_limit_cooldown_sec: float = Field(default=0.8, alias="OPENAI_DIALOGUE_RATE_LIMIT_COOLDOWN_SEC")
     openai_ocr_batch_pace_sec: float = Field(default=0.35, alias="OPENAI_OCR_BATCH_PACE_SEC")
+    scene_segment_window_size: int = Field(default=180, alias="SCENE_SEGMENT_WINDOW_SIZE")
+    scene_segment_overlap: int = Field(default=20, alias="SCENE_SEGMENT_OVERLAP")
+    scene_segment_fallback_gap_sec: float = Field(default=1.2, alias="SCENE_SEGMENT_FALLBACK_GAP_SEC")
 
     elevenlabs_sfx_enabled: bool = Field(default=False, alias="ELEVENLABS_SFX_ENABLED")
     elevenlabs_sfx_model_id: str = Field(default="eleven_text_to_sound_v2", alias="ELEVENLABS_SFX_MODEL_ID")
@@ -127,6 +131,9 @@ class Settings(BaseSettings):
     audio_mixer_ducking_attack_ms: int = Field(default=50, alias="AUDIO_MIXER_DUCKING_ATTACK_MS")
     audio_mixer_ducking_release_ms: int = Field(default=400, alias="AUDIO_MIXER_DUCKING_RELEASE_MS")
     audio_mixer_normalize_loudness: bool = Field(default=True, alias="AUDIO_MIXER_NORMALIZE_LOUDNESS")
+    audio_mixer_use_loudnorm: bool = Field(default=True, alias="AUDIO_MIXER_USE_LOUDNORM")
+    audio_mixer_highpass_hz: int = Field(default=80, alias="AUDIO_MIXER_HIGHPASS_HZ")
+    audio_mixer_lowpass_hz: int = Field(default=12000, alias="AUDIO_MIXER_LOWPASS_HZ")
 
     elevenlabs_sts_enabled: bool = Field(default=False, alias="ELEVENLABS_STS_ENABLED")
     elevenlabs_sts_model_id: str = Field(default="eleven_multilingual_sts_v2", alias="ELEVENLABS_STS_MODEL_ID")

@@ -203,3 +203,31 @@ pre {
   padding: 16px;
   color: var(--muted);
 }
+
+.step-visualizer {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.step-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: linear-gradient(160deg, rgba(27, 37, 59, 0.7), rgba(13, 19, 36, 0.9));
+}
+.step-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.step-done {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+.step-failed {
+  border-color: rgba(248, 113, 113, 0.65);
+}
+.step-pending {
+  border-color: rgba(148, 163, 184, 0.4);
+}

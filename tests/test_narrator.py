@@ -1,6 +1,6 @@
 from app.config import settings as app_settings
 from app.models.schemas import ScriptLine
-from app.services.audio.character_engine import get_voice
+from app.services.audio.character_engine import get_character_profile, get_voice
 from app.services.audio.dialogue_analyzer import estimate_emotion_intensity
 from app.services.audio.pause_engine import pause_seconds
 from app.services.audio.speech_renderer import render_speech
@@ -52,6 +52,12 @@ def test_select_elevenlabs_voice_supports_secondary_same_gender_slots(monkeypatc
     assert get_voice(female_1, 0) == app_settings.elevenlabs_voice_female
     assert get_voice(female_2, 0) == "female_voice_alt_2"
     assert get_voice(female_3, 0) == "female_voice_alt_3"
+
+
+def test_character_profile_contains_voice_direction_keys():
+    line = ScriptLine(panel_path="p1", narration="hello", speaker="male_1", gender="male", emotion="neutral")
+    profile = get_character_profile(line, 0)
+    assert set(profile.keys()) == {"stability", "similarity_boost", "style", "speed"}
 
 
 def test_render_performance_text_adds_punctuation():

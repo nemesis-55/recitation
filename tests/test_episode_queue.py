@@ -15,7 +15,7 @@ def test_episode_queue_selects_explicit_episode_numbers(monkeypatch):
         "app.services.episode_queue.generate_video",
         lambda _req: GenerateResponse(status="completed", video_path="/tmp/v.mp4"),
     )
-    payload = EpisodeRangeGenerateRequest(title_slug="x", episode_numbers=[1, 3], subtitles=True)
+    payload = EpisodeRangeGenerateRequest(title_slug="x", episode_numbers=[1, 3])
     out = run_episode_range_sequential(payload)
     assert out.status == "completed"
     assert out.submitted == 2
@@ -42,7 +42,6 @@ def test_episode_queue_rejects_panel_filters_for_multi_episode(monkeypatch):
         select_all_episodes=True,
         panel_from=1,
         panel_to=10,
-        subtitles=True,
     )
     out = run_episode_range_sequential(payload)
     assert out.status == "failed"
@@ -85,6 +84,6 @@ def test_episode_queue_auto_chunk_stitches(monkeypatch, tmp_path):
     monkeypatch.setattr("app.services.episode_queue.settings.auto_chunk_max_panels", 80)
     monkeypatch.setattr("app.services.episode_queue.settings.auto_chunk_max_chunks", 10)
 
-    out = run_episode_range_sequential(EpisodeRangeGenerateRequest(title_slug="x", episode_numbers=[1], subtitles=True))
+    out = run_episode_range_sequential(EpisodeRangeGenerateRequest(title_slug="x", episode_numbers=[1]))
     assert out.status == "completed"
     assert out.results[0]["video_path"].endswith("/video_full.mp4")

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import email
 import json
-import random
 import time
 from collections import Counter
 from pathlib import Path
@@ -24,7 +23,7 @@ def _dominant_emotion(lines: list[ScriptLine]) -> str:
     if not emotions:
         return "neutral"
     counts = Counter(emotions)
-    return counts.most_common(1)[0][0]
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
 
 
 _EMOTION_LABELS: dict[str, str] = {
@@ -118,7 +117,7 @@ def generate_scene_music(prompt: str, duration_ms: int, output_path: Path) -> No
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=max(settings.provider_timeout_sec, 90))
             if resp.status_code == 429 and attempt < settings.provider_retries:
-                time.sleep(1.0 * (2**attempt) + random.uniform(0.0, 0.5))
+                time.sleep(1.0 * (2**attempt))
                 continue
             resp.raise_for_status()
             ctype = resp.headers.get("Content-Type", "")

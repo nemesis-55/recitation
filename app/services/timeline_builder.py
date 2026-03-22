@@ -20,19 +20,26 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
         lines = [ScriptLine(panel_path=panels[i].image_path, narration="...", emotion="neutral") for i in range(len(panels))]
     out: list[TimelineEntry] = []
     cursor = 0.0
-    line_by_panel_path = {line.panel_path: line for line in lines}
+    lines_by_panel_path: dict[str, list[ScriptLine]] = {}
+    for line in lines:
+        lines_by_panel_path.setdefault(line.panel_path, []).append(line)
     panel_audio_duration_by_path: dict[str, float] = {}
     for seg in audio:
         if 0 <= seg.line_index < len(lines):
             line = lines[seg.line_index]
             panel_audio_duration_by_path[line.panel_path] = panel_audio_duration_by_path.get(line.panel_path, 0.0) + max(
-                0.0, seg.duration_sec
+                0.0, seg.duration_sec + seg.pause_sec
             )
     has_audio_timing = len(panel_audio_duration_by_path) > 0
 
     for panel in panels:
-        line = line_by_panel_path.get(panel.image_path)
-        narration = line.narration if line else ("" if settings.subtitle_strict_from_script else "...")
+        line_group = lines_by_panel_path.get(panel.image_path, [])
+        if line_group:
+            narration = " ".join([(ln.narration or "").strip() for ln in line_group if (ln.narration or "").strip()]).strip()
+            if not narration:
+                narration = ""
+        else:
+            narration = "" if settings.subtitle_strict_from_script else "..."
         panel_audio_duration = panel_audio_duration_by_path.get(panel.image_path)
         if panel_audio_duration is not None:
             # When audio exists, use it as source-of-truth for panel duration.

@@ -6,6 +6,21 @@ import re
 from app.config import settings
 from app.models.schemas import ScriptLine
 
+_DEFAULT_CHARACTER_PROFILES: dict[str, dict[str, float | str]] = {
+    "male_1": {"stability": 0.34, "similarity_boost": 0.8, "style": 0.45, "speed": 1.04},
+    "male_2": {"stability": 0.4, "similarity_boost": 0.8, "style": 0.35, "speed": 1.0},
+    "male_3": {"stability": 0.32, "similarity_boost": 0.78, "style": 0.5, "speed": 1.06},
+    "male_4": {"stability": 0.45, "similarity_boost": 0.82, "style": 0.28, "speed": 0.98},
+    "male_5": {"stability": 0.38, "similarity_boost": 0.79, "style": 0.42, "speed": 1.02},
+    "male_6": {"stability": 0.36, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
+    "male_7": {"stability": 0.42, "similarity_boost": 0.82, "style": 0.32, "speed": 0.96},
+    "female_1": {"stability": 0.43, "similarity_boost": 0.82, "style": 0.34, "speed": 0.97},
+    "female_2": {"stability": 0.37, "similarity_boost": 0.8, "style": 0.46, "speed": 1.0},
+    "female_3": {"stability": 0.48, "similarity_boost": 0.84, "style": 0.26, "speed": 0.94},
+    "narrator": {"stability": 0.52, "similarity_boost": 0.84, "style": 0.22, "speed": 0.98},
+    "unknown_1": {"stability": 0.42, "similarity_boost": 0.78, "style": 0.3, "speed": 1.0},
+}
+
 
 def _voice_map() -> dict[str, str]:
     raw = settings.elevenlabs_voice_map_json
@@ -18,6 +33,32 @@ def _voice_map() -> dict[str, str]:
         return {str(k).strip().lower(): str(v).strip() for k, v in data.items()}
     except Exception:
         return {}
+
+
+def _character_profiles() -> dict[str, dict[str, float | str]]:
+    raw = settings.elevenlabs_character_profiles_json
+    if not raw or not str(raw).strip():
+        return _DEFAULT_CHARACTER_PROFILES
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return _DEFAULT_CHARACTER_PROFILES
+    if not isinstance(data, dict):
+        return _DEFAULT_CHARACTER_PROFILES
+    out = dict(_DEFAULT_CHARACTER_PROFILES)
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            continue
+        k = str(key).strip().lower()
+        base = dict(_DEFAULT_CHARACTER_PROFILES.get(k, {}))
+        for field in ("stability", "similarity_boost", "style", "speed"):
+            if field in value:
+                try:
+                    base[field] = float(value[field])
+                except Exception:
+                    pass
+        out[k] = base
+    return out
 
 
 def _infer_gender_from_speaker(speaker: str) -> str:
@@ -85,6 +126,23 @@ def get_voice(line: ScriptLine, line_index: int) -> str:
     if gender == "female":
         return settings.elevenlabs_voice_female
     return settings.elevenlabs_voice_unknown
+
+
+def get_character_profile(line: ScriptLine, line_index: int) -> dict[str, float]:
+    speaker = (line.speaker or "").strip().lower()
+    profiles = _character_profiles()
+    key = speaker if speaker in profiles else ""
+    if not key:
+        key = "narrator" if speaker == "narrator" else "unknown_1"
+    profile = profiles.get(key, _DEFAULT_CHARACTER_PROFILES["unknown_1"])
+    # Tiny deterministic variation by line index to avoid robotic flatness.
+    wiggle = ((line_index % 5) - 2) * 0.01
+    return {
+        "stability": max(0.2, min(0.8, float(profile.get("stability", 0.42)) + wiggle)),
+        "similarity_boost": max(0.55, min(0.9, float(profile.get("similarity_boost", 0.78)))),
+        "style": max(0.0, min(0.9, float(profile.get("style", 0.3)))),
+        "speed": max(0.85, min(1.15, float(profile.get("speed", 1.0)))),
+    }
 
 
 def resolved_characters(lines: list[ScriptLine]) -> dict[str, str]:

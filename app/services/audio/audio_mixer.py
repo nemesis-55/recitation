@@ -98,11 +98,16 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
     else:
         filters.append("[fg]anull[preout]")
 
-    filters.append(f"[preout]atrim=0:{target_duration_sec:.3f},asetpts=N/SR/TB[trimmed]")
+    hp = max(20, int(settings.audio_mixer_highpass_hz))
+    lp = max(hp + 1000, int(settings.audio_mixer_lowpass_hz))
+    filters.append(f"[preout]atrim=0:{target_duration_sec:.3f},asetpts=N/SR/TB,highpass=f={hp},lowpass=f={lp}[shaped]")
     if settings.audio_mixer_normalize_loudness:
-        filters.append("[trimmed]dynaudnorm=f=250:g=15,alimiter=limit=0.95[aout]")
+        if settings.audio_mixer_use_loudnorm:
+            filters.append("[shaped]loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.95[aout]")
+        else:
+            filters.append("[shaped]dynaudnorm=f=250:g=15,alimiter=limit=0.95[aout]")
     else:
-        filters.append("[trimmed]alimiter=limit=0.95[aout]")
+        filters.append("[shaped]alimiter=limit=0.95[aout]")
 
     run_ffmpeg(
         [

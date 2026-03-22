@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from collections import Counter
 
 from app.models.schemas import AudioSegment as AudioSegmentSchema
 from app.models.schemas import ScriptLine, SrtTimelineLine
 from app.services.audio.audio_mixer import mix_audio
-from app.services.audio.character_engine import get_voice
+from app.services.audio.character_engine import get_character_profile, get_voice
 from app.services.audio.dialogue_analyzer import analyze_srt_timeline
-from app.services.audio.elevenlabs_sts import convert_speech_to_voice
-from app.services.audio.music_engine import resolve_music_bed
-from app.services.audio.speech_renderer import render_speech
-from app.services.audio.timeline_builder import AudioEvent, build_cinematic_timeline, build_timeline
-from app.services.audio.tts_elevenlabs import generate_tts
-from app.utils.ffmpeg_runner import probe_duration_seconds, run_ffmpeg
+from app.services.audio.episode_state import EpisodeState
+from app.services.audio.scene_processor import process_scene
+from app.services.audio.scene_segmenter import segment_scenes
+from app.services.audio.scene_analyzer import analyze_scene
+from app.services.audio.music_engine import resolve_music_bed  # compatibility for tests/older patch points
+from app.services.audio.tts_elevenlabs import generate_tts  # compatibility for tests/older patch points
+from app.utils.ffmpeg_runner import probe_duration_seconds, run_ffmpeg  # probe kept for test patch points
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,26 +32,6 @@ def _to_script_line(item: SrtTimelineLine, panel_path: str) -> ScriptLine:
     )
 
 
-def _write_silence_segment(output_path: Path, duration_sec: float) -> None:
-    dur = max(0.05, float(duration_sec))
-    run_ffmpeg(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=44100:cl=stereo",
-            "-t",
-            f"{dur:.3f}",
-            "-c:a",
-            "libmp3lame",
-            str(output_path),
-        ],
-        stage="audio_pipeline",
-    )
-
-
 def run_audio_pipeline(
     lines: list[SrtTimelineLine], audio_dir: Path, panel_paths: list[str]
 ) -> tuple[Path, list[AudioSegmentSchema], list[dict], dict]:
@@ -56,84 +39,117 @@ def run_audio_pipeline(
         raise ValueError("audio_pipeline requires at least one panel path")
     logger.info("audio_pipeline start lines=%s panel_paths=%s", len(lines), len(panel_paths))
     analyzed = analyze_srt_timeline(lines)
-    voice_events: list[AudioEvent] = []
-    # Keep narration + background music only (no SFX layer).
-    sfx_events: list[AudioEvent] = []
-    segments: list[AudioSegmentSchema] = []
-    script_lines: list[ScriptLine] = []
-    prev_voice_end = 0.0
+    scene_meta = analyze_scene(analyzed)
+    scenes = segment_scenes(analyzed)
+    episode_state = EpisodeState()
+
+    # Assign stable character voices once per episode.
     for idx, line in enumerate(analyzed):
         panel_path = panel_paths[min(idx, max(0, len(panel_paths) - 1))]
         sl = _to_script_line(line, panel_path=panel_path)
-        sl.voice = get_voice(sl, idx)
-        sl.rendered_text = render_speech(line.text, line.emotion, float(line.intensity))
-        voice_path = audio_dir / f"line_{idx:03d}.mp3"
-        raw_start = float(line.start_sec)
-        # Never begin a line before the previous spoken line has ended.
-        start = max(raw_start, prev_voice_end)
-        slot_dur = max(0.05, float(line.end_sec - line.start_sec))
-        if sl.rendered_text:
-            generate_tts(
-                text=sl.rendered_text,
-                voice_id=sl.voice,
-                emotion=sl.emotion,
-                intensity=float(sl.emotion_intensity or 0.5),
-                output_path=voice_path,
-            )
-            if settings.elevenlabs_sts_enabled and float(sl.emotion_intensity or 0.5) >= settings.elevenlabs_sts_intensity_threshold:
-                sts_path = audio_dir / f"line_{idx:03d}_sts.mp3"
-                convert_speech_to_voice(voice_path, sl.voice, sts_path)
-                voice_path = sts_path
-            voice_dur = max(0.05, probe_duration_seconds(voice_path))
-            logger.info(
-                "audio_pipeline line_done line_index=%s speaker=%s emotion=%s intensity=%.2f",
-                idx,
-                sl.speaker,
-                sl.emotion,
-                float(sl.emotion_intensity or 0.5),
-            )
-        else:
-            _write_silence_segment(voice_path, slot_dur)
-            voice_dur = slot_dur
-            logger.info("audio_pipeline line_done line_index=%s mode=silence slot_dur=%.2f", idx, slot_dur)
-        voice_events.append(AudioEvent(type="voice", file=str(voice_path), start=start, duration=voice_dur, line_index=idx))
-        prev_voice_end = start + voice_dur
-        segments.append(
-            AudioSegmentSchema(
-                line_index=idx,
-                audio_path=str(voice_path),
-                start_sec=start,
-                end_sec=start + voice_dur,
-                duration_sec=voice_dur,
-                pause_sec=max(0.0, slot_dur - voice_dur),
-                provider="elevenlabs",
-                voice=sl.voice,
-                rendered_text=sl.rendered_text,
-            )
-        )
-        line.panel_path = panel_path
-        line.performance_text = sl.rendered_text
-        script_lines.append(sl)
+        v = get_voice(sl, idx)
+        p = get_character_profile(sl, idx)
+        episode_state.remember_character(sl.speaker, v, p)
 
-    music_bed, music_src, music_reason = resolve_music_bed(script_lines, audio_dir)
-    music_event = None
-    if music_bed is not None:
-        music_event = AudioEvent(type="music", file=str(music_bed), start=0.0, duration=0.0, line_index=-1)
+    def _derive_scene_type(chunk: list[SrtTimelineLine]) -> str:
+        emotions = [str(ln.emotion or "neutral").lower() for ln in chunk if (ln.text or "").strip()]
+        if not emotions:
+            return "neutral"
+        counts = Counter(emotions)
+        emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        if emo == "angry":
+            return "fight"
+        if emo in {"sad", "fear"}:
+            return "emotional"
+        return "neutral"
 
-    events = build_cinematic_timeline(voice_events=voice_events, sfx_events=sfx_events, music_event=music_event)
+    def _scene_input(scene: dict) -> tuple[dict, list[SrtTimelineLine], list[str], Path, float, EpisodeState, object, object, object, object]:
+        lo, hi = int(scene["panel_range"][0]), int(scene["panel_range"][1])
+        lo = max(1, lo)
+        hi = min(len(analyzed), max(lo, hi))
+        chunk = [analyzed[i - 1] for i in range(lo, hi + 1)]
+        paths = [panel_paths[min(i - 1, len(panel_paths) - 1)] for i in range(lo, hi + 1)]
+        scene = dict(scene)
+        scene["scene_type"] = _derive_scene_type(chunk)
+        scene_dir = audio_dir / f"scene_{int(scene['scene_id']):03d}"
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        scene_start = float(chunk[0].start_sec) if chunk else 0.0
+        return scene, chunk, paths, scene_dir, scene_start, episode_state, generate_tts, mix_audio, resolve_music_bed, probe_duration_seconds
+
+    scene_inputs = [_scene_input(scene) for scene in scenes]
+    max_workers = max(1, min(4, len(scene_inputs)))
+    if max_workers == 1:
+        scene_results = [process_scene(*inp) for inp in scene_inputs]
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            scene_results = list(pool.map(lambda args: process_scene(*args), scene_inputs))
+
+    scene_results.sort(key=lambda x: int(x.get("scene_id", 0)))
+    scene_audio_files = [str(Path(sr["audio"]).resolve()) for sr in scene_results]
     narration_path = audio_dir / "narration.mp3"
-    logger.info(
-        "audio_pipeline mixer_begin voice_events=%s sfx_events=%s music_source=%s",
-        len(voice_events),
-        len(sfx_events),
-        music_src,
-    )
-    mix_audio(events=events, output_path=narration_path, work_dir=audio_dir)
-    logger.info("audio_pipeline mixer_done output=%s", narration_path)
+    if len(scene_audio_files) == 1:
+        narration_path.write_bytes(Path(scene_audio_files[0]).read_bytes())
+    else:
+        concat_file = audio_dir / "scenes_concat.txt"
+        concat_file.write_text("\n".join([f"file '{p}'" for p in scene_audio_files]), encoding="utf-8")
+        run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c:a",
+                "libmp3lame",
+                str(narration_path),
+            ],
+            stage="audio_pipeline",
+        )
+
+    # Flatten scene timelines into episode timeline using cumulative offsets.
+    flattened_timeline: list[dict] = []
+    flattened_segments: list[AudioSegmentSchema] = []
+    scene_offset = 0.0
+    line_cursor = 0
+    for sr in scene_results:
+        for e in sr.get("timeline", []):
+            flattened_timeline.append(
+                {
+                    "type": e.get("type"),
+                    "file": e.get("file"),
+                    "start": round(float(e.get("start", 0.0)) + scene_offset, 3),
+                    "duration": round(float(e.get("duration", 0.0)), 3),
+                    "line_index": int(e.get("line_index", -1)) + line_cursor,
+                }
+            )
+        for seg in sr.get("segments", []):
+            flattened_segments.append(
+                AudioSegmentSchema(
+                    line_index=int(seg.line_index) + line_cursor,
+                    audio_path=seg.audio_path,
+                    start_sec=float(seg.start_sec) + scene_offset,
+                    end_sec=float(seg.end_sec) + scene_offset,
+                    duration_sec=float(seg.duration_sec),
+                    pause_sec=float(seg.pause_sec),
+                    provider=seg.provider,
+                    voice=seg.voice,
+                    rendered_text=seg.rendered_text,
+                )
+            )
+        scene_offset += float(sr.get("duration", 0.0))
+        line_cursor += len(sr.get("segments", []))
+
     audio_meta = {
-        "narration_music_source": music_src,
-        "narration_music_reason": music_reason,
-        "sfx_source": "disabled",
+        "narration_music_source": "scene_level",
+        "narration_music_reason": "scene_processing",
+        "sfx_source": "enabled" if settings.elevenlabs_sfx_enabled else "disabled",
         "quality": "cinematic",
+        "scene_type": str(scene_meta.get("scene_type", "neutral")),
+        "scene_emotion": str(scene_meta.get("scene_emotion", "neutral")),
+        "characters": list(episode_state.characters.values()),
+        "scenes": [{"scene_id": int(s.get("scene_id", 0)), "panel_range": s.get("panel_range")} for s in scenes],
     }
-    return narration_path, segments, build_timeline(events), audio_meta
+    return narration_path, flattened_segments, flattened_timeline, audio_meta

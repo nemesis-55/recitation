@@ -26,13 +26,13 @@ def test_dialogue_analyzer_fills_missing_intensity():
 def test_pick_sfx_returns_event_marker_for_fear(tmp_path: Path):
     line = ScriptLine(panel_path="p", narration="Hello", emotion="fear")
     paths = pick_sfx(line, tmp_path)
-    assert paths and paths[0].as_posix().startswith("event:/fear")
+    assert paths and paths[0].as_posix().startswith("event:/light_breath")
 
 
 def test_pick_sfx_keyword_hit_maps_event(tmp_path: Path):
     line = ScriptLine(panel_path="p", narration="He lands a punch", emotion="neutral")
     paths = pick_sfx(line, tmp_path)
-    assert paths and paths[0].as_posix().startswith("event:/hit")
+    assert paths and paths[0].as_posix().startswith("event:/impact")
 
 
 def test_music_prompt_for_emotion():

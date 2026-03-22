@@ -44,7 +44,7 @@ def test_ops_generate_range_route(monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/ops/api/generate-range",
-        json={"title_slug": "omniscient-reader", "episode_from": 1, "episode_to": 2, "subtitles": True},
+        json={"title_slug": "omniscient-reader", "episode_from": 1, "episode_to": 2},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -67,10 +67,19 @@ def test_ops_generate_range_route_accepts_episode_numbers(monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/ops/api/generate-range",
-        json={"title_slug": "omniscient-reader", "episode_numbers": [1, 5, 9], "subtitles": True},
+        json={"title_slug": "omniscient-reader", "episode_numbers": [1, 5, 9]},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "completed"
     assert payload["submitted"] == 3
+
+
+def test_ops_generate_range_rejects_deprecated_fields():
+    client = TestClient(app)
+    response = client.post(
+        "/ops/api/generate-range",
+        json={"title_slug": "omniscient-reader", "episode_from": 1, "episode_to": 2, "subtitles": True},
+    )
+    assert response.status_code == 422
 

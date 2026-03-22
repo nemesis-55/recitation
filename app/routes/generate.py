@@ -14,7 +14,7 @@ from app.services.panel_extractor import extract_panels
 from app.services.pdf_loader import load_pdf
 from app.services.preflight import run_preflight, validate_page_resolution
 from app.services.quality_checker import check_video
-from app.services.subtitle_generator import generate_subtitles, load_srt_timeline
+from app.services.subtitle_generator import generate_subtitles
 from app.services.timeline_builder import build_timeline
 from app.services.video_editor import assemble_video
 from app.services.webtoon_loader import is_webtoon_url, load_webtoon_panels
@@ -159,15 +159,6 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                     error_code="PANEL_RANGE_EMPTY",
                 )
 
-        if payload.max_panels is not None:
-            original_count = len(panels)
-            panels = panels[: payload.max_panels]
-            report["stages"]["panel_limit"] = {
-                "requested_max_panels": payload.max_panels,
-                "original_panels": original_count,
-                "selected_panels": len(panels),
-            }
-
         with StageTimer(logger, "srt_loader"):
             stage_start = time.time()
             qa_panels = _validate_panel_assets(panels)
@@ -185,21 +176,12 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                     message=f"Unreadable panel files detected before SRT stage (count={qa_panels['unreadable_count']})",
                     error_code="PANEL_FILES_UNREADABLE",
                 )
-            if payload.srt_path:
-                srt_lines = load_srt_timeline(payload.srt_path)
-                if len(srt_lines) > len(panels):
-                    srt_lines = srt_lines[: len(panels)]
-                report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": payload.srt_path, "source": "provided"}
-                logger.info("srt_loader source=provided entries=%s path=%s", len(srt_lines), payload.srt_path)
-            else:
-                # Backward-compatible path: auto-generate SRT timeline from OCR.
-                ocr = extract_text_batch(panels)
-                srt_lines = _build_srt_lines_from_ocr(ocr, fallback_duration=max(1.2, settings.min_panel_duration_sec))
-                if len(srt_lines) > len(panels):
-                    srt_lines = srt_lines[: len(panels)]
-                report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": None, "source": "auto_generated_from_ocr"}
-                report["warnings"].append("srt_path not provided: generated subtitle timeline from OCR.")
-                logger.info("srt_loader source=auto_generated_from_ocr entries=%s", len(srt_lines))
+            ocr = extract_text_batch(panels)
+            srt_lines = _build_srt_lines_from_ocr(ocr, fallback_duration=max(1.2, settings.min_panel_duration_sec))
+            if len(srt_lines) > len(panels):
+                srt_lines = srt_lines[: len(panels)]
+            report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": None, "source": "auto_generated_from_ocr"}
+            logger.info("srt_loader source=auto_generated_from_ocr entries=%s", len(srt_lines))
             _enforce_stage_timeout("srt_loader", stage_start)
             report["artifacts"] = report.get("artifacts", {})
 
@@ -258,7 +240,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             report["stages"]["panel_animator"] = {"clips": len(clips)}
 
         subtitles_path = None
-        use_subtitles = payload.subtitles if payload.subtitles is not None else settings.enable_subtitles_default
+        use_subtitles = settings.enable_subtitles_default
         if use_subtitles:
             with StageTimer(logger, "subtitle_generator"):
                 stage_start = time.time()
@@ -273,11 +255,10 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         with StageTimer(logger, "video_editor"):
             stage_start = time.time()
             final_path = dirs["final"] / "video.mp4"
-            video_bgm = payload.bgm_path or settings.bgm_default_path
+            video_bgm = settings.bgm_default_path
             # Avoid doubling the same default BGM (already mixed under narration when source is bgm_default).
             if (
-                not payload.bgm_path
-                and audio_meta.get("narration_music_source") == "bgm_default"
+                audio_meta.get("narration_music_source") == "bgm_default"
                 and settings.audio_bed_in_narration
             ):
                 video_bgm = None

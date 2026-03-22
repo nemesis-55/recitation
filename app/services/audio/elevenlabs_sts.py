@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import random
 import time
 from pathlib import Path
 
@@ -40,7 +39,7 @@ def convert_speech_to_voice(input_audio: Path, voice_id: str, output_audio: Path
                 files = {"audio": (input_audio.name, f, "audio/mpeg")}
                 resp = requests.post(url, headers=headers, data=form, files=files, timeout=max(settings.provider_timeout_sec, 90))
             if resp.status_code == 429 and attempt < settings.provider_retries:
-                time.sleep(0.9 * (2**attempt) + random.uniform(0.0, 0.3))
+                time.sleep(0.9 * (2**attempt))
                 continue
             resp.raise_for_status()
             output_audio.write_bytes(resp.content)

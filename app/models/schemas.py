@@ -3,20 +3,16 @@ from __future__ import annotations
 from typing import Any, Literal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     pdf_path: str = Field(..., description="Absolute or relative path to a manga PDF file.")
-    srt_path: Optional[str] = Field(default=None, description="Absolute or relative path to source subtitles .srt file.")
-    subtitles: bool = Field(default=True)
-    target_duration_sec: Optional[int] = Field(default=None, ge=30, le=180)
-    max_panels: Optional[int] = Field(default=None, ge=1, le=500)
     page_from: Optional[int] = Field(default=None, ge=0)
     page_to: Optional[int] = Field(default=None, ge=0)
     panel_from: Optional[int] = Field(default=None, ge=0)
     panel_to: Optional[int] = Field(default=None, ge=0)
-    bgm_path: Optional[str] = None
 
 
 class GenerateResponse(BaseModel):
@@ -120,20 +116,16 @@ class MangaSearchResponse(BaseModel):
 
 
 class EpisodeRangeGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title_slug: str
     episode_from: Optional[int] = Field(default=None, ge=0)
     episode_to: Optional[int] = Field(default=None, ge=0)
     episode_numbers: Optional[list[int]] = None
     select_all_episodes: bool = False
-    subtitles: bool = True
-    target_duration_sec: Optional[int] = Field(default=None, ge=30, le=180)
-    max_panels: Optional[int] = Field(default=None, ge=1, le=500)
     page_from: Optional[int] = Field(default=None, ge=0)
     page_to: Optional[int] = Field(default=None, ge=0)
     panel_from: Optional[int] = Field(default=None, ge=0)
     panel_to: Optional[int] = Field(default=None, ge=0)
-    bgm_path: Optional[str] = None
-    srt_path: Optional[str] = None
 
 
 class EpisodeRangeGenerateResponse(BaseModel):

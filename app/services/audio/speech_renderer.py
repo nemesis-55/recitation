@@ -83,7 +83,23 @@ def _looks_like_sfx_noise(text: str) -> bool:
     return len(tokens) <= 4 and sfx_hits >= max(1, len(tokens) - 1)
 
 
-def render_speech(text: str, emotion: str, intensity: float) -> str:
+def _apply_speech_mode(cleaned: str, mode: str) -> str:
+    m = (mode or "none").strip().lower()
+    if m == "uppercase_exclaim":
+        out = cleaned.upper()
+        if not out.endswith("!"):
+            out += "!"
+        return out
+    if m == "broken_pause":
+        return "... " + cleaned.replace(" ", "... ")
+    if m == "trailing_pause":
+        if cleaned.endswith("..."):
+            return cleaned
+        return f"{cleaned}..."
+    return cleaned
+
+
+def render_speech(text: str, emotion: str, intensity: float, speech_mode: str = "none") -> str:
     cleaned = " ".join((text or "").split())
     if not cleaned:
         return ""
@@ -91,25 +107,11 @@ def render_speech(text: str, emotion: str, intensity: float) -> str:
         return ""
     cleaned = cleaned.replace("/", ", ")
     cleaned = re.sub(r"[~*_`]+", "", cleaned)
+    cleaned = _apply_speech_mode(cleaned, speech_mode)
     lowered = cleaned.lower()
     # Keep exertion vocals instead of skipping them.
     if re.match(r"^h+u+$", lowered) or re.match(r"^h+a+$", lowered):
         cleaned = f"{cleaned}..."
-    if emotion == "fear" and intensity >= 0.65:
-        # Force hesitant cadence for fear lines.
-        cleaned = cleaned.replace(" ", ", ")
-        if not cleaned.startswith("..."):
-            cleaned = "In a trembling breath, " + cleaned
-    elif emotion == "sad" and intensity >= 0.58:
-        # Add trailing emotional hang for sad delivery.
-        cleaned = f"In a low voice, {cleaned}"
-    elif emotion == "angry" and intensity >= 0.8 and len(cleaned) <= 90:
-        # Emphasize angry delivery without shouting all caps.
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if not cleaned.endswith("!"):
-            cleaned = f"{cleaned}!"
-    elif emotion == "happy" and intensity >= 0.7 and cleaned[-1] not in "!":
-        cleaned = f"{cleaned}!"
     cleaned = _to_third_person(cleaned)
     bridge = _scene_bridge(cleaned, emotion, intensity)
     if bridge:

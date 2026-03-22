@@ -114,15 +114,10 @@ def _generate_episode_with_auto_chunk(payload: EpisodeRangeGenerateRequest, view
     for chunk_idx in range(max_chunks):
         req = GenerateRequest(
             pdf_path=viewer_url,
-            srt_path=payload.srt_path,
-            subtitles=payload.subtitles,
-            target_duration_sec=payload.target_duration_sec,
-            max_panels=None,
             page_from=None,
             page_to=None,
             panel_from=cursor,
             panel_to=cursor + chunk_size - 1,
-            bgm_path=payload.bgm_path,
         )
         response = generate_video(req)
         if response.status == "failed" and response.error_code == "PANEL_RANGE_EMPTY":
@@ -268,20 +263,15 @@ def run_episode_range_sequential(payload: EpisodeRangeGenerateRequest) -> Episod
             idx,
             len(selected),
         )
-        if settings.auto_chunk_enabled and not _has_panel_filters(payload) and payload.max_panels is None:
+        if settings.auto_chunk_enabled and not _has_panel_filters(payload):
             result = _generate_episode_with_auto_chunk(payload, viewer_url, ep_no, episode.get("episode_slug"))
         else:
             req = GenerateRequest(
                 pdf_path=viewer_url,
-                srt_path=payload.srt_path,
-                subtitles=payload.subtitles,
-                target_duration_sec=payload.target_duration_sec,
-                max_panels=payload.max_panels,
                 page_from=payload.page_from,
                 page_to=payload.page_to,
                 panel_from=payload.panel_from,
                 panel_to=payload.panel_to,
-                bgm_path=payload.bgm_path,
             )
             response = generate_video(req)
             result = {

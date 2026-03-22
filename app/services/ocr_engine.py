@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import random
 import re
 from pathlib import Path
 import time
@@ -76,9 +75,9 @@ def _parse_retry_after_seconds(exc: Exception) -> float | None:
 def _retry_sleep_seconds(exc: Exception, attempt: int) -> float:
     retry_after = _parse_retry_after_seconds(exc)
     if retry_after is not None:
-        return min(20.0, retry_after + random.uniform(0.05, 0.35))
+        return min(20.0, retry_after + (0.1 * max(0, attempt)))
     base = 1.0 * (2**attempt)
-    return min(20.0, base + random.uniform(0.05, 0.35))
+    return min(20.0, base + (0.1 * max(0, attempt)))
 
 
 def _is_rate_limited(exc: Exception) -> bool:

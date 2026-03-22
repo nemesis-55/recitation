@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import random
 import re
 import time
 from pathlib import Path
@@ -13,25 +11,60 @@ from app.utils.cache_utils import hash_text, read_cache_bytes, write_cache_bytes
 from app.utils.errors import ProviderError
 
 
-def _event_prompt_map() -> dict[str, str]:
+def _event_prompt_map() -> dict[str, list[str]]:
     return {
-        "hit": "Heavy cinematic punch impact, body hit, deep low-end thump, tight transient",
-        "fall": "Body fall impact on hard floor, cloth movement, dull cinematic thump",
-        "fear": "Sharp breath intake, tense air, heartbeat-like anxiety pulse",
-        "movement": "Fast cloth swoosh and sudden movement pass-by",
+        "impact": [
+            "Heavy cinematic punch impact, body hit, deep low-end thump, tight transient",
+            "Close-up impact hit with short bass thud and cloth rustle",
+        ],
+        "thump": [
+            "Body fall impact on hard floor, cloth movement, dull cinematic thump",
+            "Weighty drop impact with low thump and room tail",
+        ],
+        "movement": [
+            "Fast cloth swoosh and sudden movement pass-by",
+            "Airy whoosh movement with light cloth detail",
+        ],
+        "light_breath": [
+            "Subtle nervous breath, short inhale and light exhale, close mic",
+        ],
+        "heavy_breath": [
+            "Heavy breath under stress, controlled but intense inhale/exhale",
+        ],
     }
+
+
+def detect_events(text: str, emotion: str, intensity: float) -> list[str]:
+    out: list[str] = []
+    lowered = (text or "").lower()
+    if re.search(r"\b(hit|punch|slam|smash|strike|attack)\b", lowered):
+        out.append("impact")
+    if re.search(r"\b(fall|fell|drop|crash|land)\b", lowered):
+        out.append("thump")
+    if re.search(r"\b(run|rush|dash|move|movement|whoosh|swoosh|slash)\b", lowered):
+        out.append("movement")
+    if (emotion or "").lower() == "fear":
+        out.append("light_breath")
+    if float(intensity) >= 0.7:
+        out.append("heavy_breath")
+    # preserve order but unique
+    dedup: list[str] = []
+    for evt in out:
+        if evt not in dedup:
+            dedup.append(evt)
+    return dedup
 
 
 def _event_from_line(line: ScriptLine) -> str | None:
     text = (line.narration or "").lower()
     if re.search(r"\b(hit|punch|slam|smash|strike)\b", text):
-        return "hit"
+        return "impact"
     if re.search(r"\b(fall|fell|drop|crash)\b", text):
-        return "fall"
+        return "thump"
     if re.search(r"\b(run|rush|dash|move|movement|whoosh)\b", text):
         return "movement"
     if (line.emotion or "").lower() == "fear" or re.search(r"\b(hu+|ha+|ah+|uh+|gasp)\b", text):
-        return "fear"
+        return "light_breath"
     return None
 
 
@@ -58,7 +91,7 @@ def generate_sfx_to_file(prompt: str, duration_seconds: float, output_path: Path
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=settings.provider_timeout_sec)
             if resp.status_code == 429 and attempt < settings.provider_retries:
-                time.sleep(0.9 * (2**attempt) + random.uniform(0.0, 0.4))
+                time.sleep(0.9 * (2**attempt))
                 continue
             resp.raise_for_status()
             output_path.write_bytes(resp.content)
@@ -78,7 +111,7 @@ def materialize_sfx_for_line(line: ScriptLine, work_dir: Path, line_index: int) 
     event = _event_from_line(line)
     if not event:
         return None
-    prompt = _event_prompt_map()[event]
+    prompt = _event_prompt_map()[event][0]
     intensity = float(line.emotion_intensity if line.emotion_intensity is not None else 0.5)
     duration = _duration_for_intensity(intensity)
     cache_key = hash_text(
@@ -100,4 +133,4 @@ def pick_sfx(line: ScriptLine, sfx_root: Path) -> list[Path]:
     event = _event_from_line(line)
     if not event:
         return []
-    return [Path(f"event://{event}")]
+    return [Path(f"event:/{event}")]
