@@ -7,9 +7,11 @@ Detailed technical guide: [`DETAILED_DOCUMENTATION.md`](DETAILED_DOCUMENTATION.m
 ## What It Does
 
 - Input: manga source (`pdf_path` or webtoon URL). Optional `srt_path` can be provided as master timeline; otherwise timeline is auto-generated from OCR.
-- Audio flow: SRT -> OpenAI dialogue analysis -> deterministic speech rendering -> ElevenLabs TTS per line -> ElevenLabs SFX -> ElevenLabs scene music -> cinematic FFmpeg mix.
+- Audio flow: SRT → OpenAI dialogue analysis → deterministic speech rendering → ElevenLabs TTS (grouped lines) → optional SFX/music → cinematic FFmpeg mix; **scene bed** can use ElevenLabs music or the **local BGM library** (`outputs/cache/bgm_library`) when configured.
 - Video flow: panels are animated using SRT durations, then muxed with narration and subtitles.
-- Provider failures are **fatal** (no local fallback for ElevenLabs SFX/Music/TTS).
+- Provider failures are **fatal** for TTS; music can **fall back** to the local BGM library or `BGM_DEFAULT_PATH` when ElevenLabs music is off.
+
+**Lower cost (no code changes):** see [`docs/COST_SAVINGS.md`](docs/COST_SAVINGS.md) and copy [`/.env.example`](.env.example) as a starting point.
 
 ## Project Layout
 
@@ -27,6 +29,32 @@ manga_video_pipeline/
   requirements.txt
 ```
 
+## Preview panel motion (Ken Burns samples)
+
+Without running a full episode, render short **YouTube** + **Reel** clips using your `PANEL_*` settings:
+
+```bash
+cd manga_video_pipeline
+python scripts/render_ken_burns_sample.py
+# → outputs/samples/sample_youtube_ken_burns.mp4
+# → outputs/samples/sample_reel_ken_burns.mp4
+```
+
+Optional: `python scripts/render_ken_burns_sample.py --panel /path/to/panel.jpg --duration 2.5`
+
+## Rebuild YouTube video from a run folder (test new panel look)
+
+After changing blur/motion settings, regenerate **only** the video from existing `panels/` + `meta/timeline.json` + `audio/narration.mp3` (no API calls):
+
+```bash
+cd manga_video_pipeline
+python scripts/rebuild_youtube_from_run.py --run-dir outputs/runs/action/a-flame-reborn/episode-1
+# → final/video_youtube_rebuild.mp4
+
+# Quick smoke test (first 3 panels only)
+python scripts/rebuild_youtube_from_run.py --run-dir outputs/runs/.../episode-1 --max-panels 3
+```
+
 ## Prerequisites
 
 - Python 3.10+
@@ -37,7 +65,9 @@ manga_video_pipeline/
 
 ## Environment
 
-Create `.env` in the **repo root** or under `manga_video_pipeline/` (both are loaded).
+Create `.env` in the **repo root** or under `manga_video_pipeline/` (both are loaded). Reference template: [`.env.example`](.env.example).
+
+**Cost tuning:** [`docs/COST_SAVINGS.md`](docs/COST_SAVINGS.md) (cache, emotion refine, EL music/SFX, OCR size, TTS grouping).
 
 **Required for real runs:**
 
@@ -51,7 +81,8 @@ LOG_LEVEL=INFO
 
 ```env
 # Video
-VIDEO_PLAYBACK_SPEED=1.0
+VIDEO_PLAYBACK_SPEED=1.2
+REEL_PLAYBACK_SPEED=1.2
 RUN_KEEP_INTERMEDIATE_CLIPS=false
 
 # SRT master timeline
@@ -61,10 +92,30 @@ SRT_REQUIRE_INPUT=true
 BGM_DEFAULT_PATH=/absolute/path/to/bed.mp3
 BGM_VOLUME=0.14
 
+# Local BGM library (default: outputs/cache/bgm_library, 10 slots bgm_00.mp3 … bgm_09.mp3)
+# Lazy-filled: ElevenLabs music (if enabled), else copy of BGM_DEFAULT_PATH, else FFmpeg tone.
+# Slot choice follows dominant dialogue emotion → one of 10 mood families; BGM_LIBRARY_COUNT>10
+# adds variant takes (bgm_10+ same style cycle as bgm_00…09), not unrelated random beds.
+# When BGM_LIBRARY_PREFER_LOCAL=true (default), narration uses the library before per-scene EL music.
+#BGM_LIBRARY_DIR=
+BGM_LIBRARY_COUNT=10
+BGM_LIBRARY_PREFER_LOCAL=true
+
+# Smoother multi-scene narration stitch (subtitles stay aligned; 0 = off)
+#AUDIO_SCENE_CROSSFADE_SEC=0.06
+
+# Video panel concat + final AAC bitrate (libx264 + aac)
+#VIDEO_CONCAT_CRF=20
+#VIDEO_CONCAT_PRESET=medium
+#VIDEO_MUX_AUDIO_BITRATE_K=192
+
 # Cinematic narration mix
 AUDIO_BED_IN_NARRATION=true
 AUDIO_MIXER_DUCKING_ENABLED=true
 AUDIO_MIXER_MUSIC_GAIN=0.16
+# Music bed only: reduce mud vs voice; 0 disables. Does not change narration timing/sync.
+AUDIO_MIXER_MUSIC_HIGHPASS_HZ=100
+AUDIO_MIXER_MUSIC_DYNAUDNORM_ENABLED=true
 AUDIO_MIXER_SFX_GAIN=0.7
 AUDIO_MIXER_VOICE_GAIN=1.0
 
@@ -72,6 +123,14 @@ AUDIO_MIXER_VOICE_GAIN=1.0
 ELEVENLABS_SFX_ENABLED=true
 ELEVENLABS_MUSIC_ENABLED=true
 ELEVENLABS_STS_ENABLED=false
+
+# TTS: more natural / less flat (defaults are tuned for human-like prosody)
+ELEVENLABS_TTS_HUMANIZE=true
+ELEVENLABS_TTS_SPEECH_SPEED=0.97
+ELEVENLABS_TTS_LINE_CONTEXT=true
+ELEVENLABS_TTS_OPTIMIZE_STREAMING_LATENCY=0
+# Model: flash is fast; try eleven_multilingual_v2 or eleven_turbo_v2_5 if you want warmer delivery.
+# ELEVENLABS_TTS_MODEL=eleven_flash_v2_5
 
 # Per-speaker ElevenLabs voice IDs (JSON)
 ELEVENLABS_VOICE_MAP_JSON=
@@ -167,8 +226,16 @@ Startup behavior:
 
 ## Testing
 
+See **[`TESTING.md`](TESTING.md)** for layout, scope, and optional debug env.
+
 ```bash
-cd manga_video_pipeline && python3 -m pytest tests/ -q
+cd manga_video_pipeline && python3 -m pytest -q
+```
+
+Optional NDJSON diagnostics (audio pipeline / mixer):
+
+```env
+PIPELINE_DEBUG_NDJSON_PATH=/tmp/pipeline_debug.ndjson
 ```
 
 ## New Environment Knobs

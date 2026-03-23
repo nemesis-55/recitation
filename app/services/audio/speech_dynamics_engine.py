@@ -60,7 +60,7 @@ def apply_speech_dynamics(text: str, emotion: str, intensity: float) -> str:
     rendered = " ".join(out).strip()
     if emo == "angry":
         rendered = re.sub(r"[.]{2,}", ".", rendered)
-        if t >= 0.65:
+        if t >= 0.48:
             rendered = rendered.upper()
         if rendered and rendered[-1] not in "!?":
             rendered += "!"
@@ -73,6 +73,30 @@ def apply_speech_dynamics(text: str, emotion: str, intensity: float) -> str:
     elif emo == "confused":
         if rendered and rendered[-1] not in ".!?":
             rendered += "?"
+    elif emo in {"determined", "serious"}:
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
+    elif emo == "hopeful":
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
+    elif emo in {"resigned", "weak", "pain"}:
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
+    elif emo in {"concerned", "worried"}:
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "?"
+    elif emo in {"urgent", "desperate"}:
+        if rendered and rendered[-1] not in "!?":
+            rendered += "!"
+    elif emo in {"frustrated", "teasing"} and t >= 0.5:
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "!"
+    elif emo in {"nostalgic", "regretful", "reassuring"}:
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
+    elif emo == "apologetic":
+        if rendered and rendered[-1] not in ".!?":
+            rendered += "."
     elif emo == "fear":
         rendered = re.sub(r"\s{2,}", " ", rendered).strip()
     elif emo == "sad":

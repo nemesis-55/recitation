@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
+
+from openai import OpenAI
 
 from app.config import settings
 from app.models.schemas import AudioSegment as AudioSegmentSchema
@@ -14,11 +17,12 @@ from app.services.audio.elevenlabs_engine import generate_sfx_event
 from app.services.audio.pause_engine import create_silence_clip
 from app.services.audio.pause_engine import pause_seconds
 from app.services.audio.sfx_alignment_engine import align_sfx
-from app.services.audio.speech_renderer import render_speech
+from app.services.audio.speech_renderer import render_speech, render_speech_for_display
 from app.services.audio.timeline_builder import AudioEvent, build_cinematic_timeline, build_timeline
 from app.services.audio.tts_elevenlabs import generate_tts
 from app.services.audio.music_engine import resolve_music_bed
 from app.utils.ffmpeg_runner import probe_duration_seconds
+from app.utils.cache_utils import hash_text, read_cache_json, write_cache_json
 from app.services.audio.episode_state import EpisodeState
 
 
@@ -28,7 +32,6 @@ _SFX_PROMPTS: dict[str, str] = {
     "movement": "Fast cloth movement whoosh, short pass-by",
     "cough": "Short dry cough vocal effect, natural and clean, no words",
 }
-
 
 def _merge_sfx_plan(rule_sfx: list[str], explicit_sfx: list[str]) -> list[str]:
     allowed = {"impact", "thump", "movement", "cough"}
@@ -73,6 +76,120 @@ def _scene_curve_value(index: int, total: int) -> float:
     return round(0.5 + (0.8 * (pos - 0.5)), 3)  # 0.5 -> 0.9
 
 
+def _ai_narration_bridge(base_line: str, emotion: str, intensity: float, scene_type: str) -> str:
+    if not settings.audio_narration_enhance_enabled:
+        return ""
+    if not settings.openai_dialogue_analysis_enabled or not settings.openai_api_key:
+        return ""
+    source = (base_line or "").strip()
+    if not source:
+        return ""
+
+    model = (settings.openai_dialogue_analysis_model or settings.openai_model).strip()
+    cache_key = hash_text(
+        json.dumps(
+            {
+                "v": 1,
+                "model": model,
+                "base_line": source,
+                "emotion": str(emotion or "neutral").lower(),
+                "intensity": round(float(intensity), 3),
+                "scene_type": str(scene_type or "neutral").lower(),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    )
+    cached = read_cache_json("narration_bridge", cache_key)
+    if isinstance(cached, dict):
+        text = str(cached.get("bridge", "")).strip()
+        return text if len(text) <= 80 else ""
+
+    prompt = (
+        "You are a cinematic narrator.\n"
+        "Write ONE short bridge line to improve flow before a manga line.\n"
+        "Return JSON only: {\"bridge\":\"...\"}\n"
+        "Rules:\n"
+        "- Max 8 words.\n"
+        "- No character names.\n"
+        "- Do not repeat or paraphrase the base line.\n"
+        "- No new plot facts; only mood/atmosphere.\n"
+        "- Keep language natural and concise.\n"
+        f"scene_type: {scene_type}\n"
+        f"emotion: {emotion}\n"
+        f"intensity: {float(intensity):.2f}\n"
+        f"base_line: {source}"
+    )
+    client = OpenAI(api_key=settings.openai_api_key, max_retries=0)
+    try:
+        try:
+            resp = client.responses.create(model=model, input=prompt, timeout=settings.provider_timeout_sec, temperature=0.2)
+        except TypeError:
+            resp = client.responses.create(model=model, input=prompt, timeout=settings.provider_timeout_sec)
+        raw = (getattr(resp, "output_text", None) or "").strip()
+        parsed = json.loads(raw)
+        bridge = str(parsed.get("bridge", "")).strip()
+        if not bridge:
+            write_cache_json("narration_bridge", cache_key, {"bridge": ""})
+            return ""
+        if bridge and bridge[-1] not in ".!?":
+            bridge += "."
+        write_cache_json("narration_bridge", cache_key, {"bridge": bridge})
+        return bridge
+    except Exception:
+        return ""
+
+
+def _mirror_narration_bridge_to_tts(enhanced_display: str, base_display: str, base_tts: str) -> str:
+    """
+    ``_maybe_enhance_narration`` only prefixes ``enhanced_display``. Apply the same spoken prefix
+    to the TTS-only line (pronunciation-fixed) so audio matches the enhanced script.
+    """
+    bd = (base_display or "").strip()
+    bt = (base_tts or "").strip()
+    ef = (enhanced_display or "").strip()
+    if not bd or ef == bd:
+        return base_tts or ""
+    if ef.endswith(bd) and len(ef) > len(bd):
+        # Format from _maybe_enhance_narration: f"{bridge} {base}"
+        prefix = ef[: -(len(bd) + 1)].strip()
+        if not prefix:
+            return base_tts or ""
+        if not bt:
+            return prefix
+        return f"{prefix} {bt}".strip()
+    return base_tts or ""
+
+
+def _maybe_enhance_narration(
+    text: str,
+    emotion: str,
+    intensity: float,
+    scene_type: str,
+    index: int,
+    total: int,
+    used_count: int,
+) -> str:
+    if not settings.audio_narration_enhance_enabled:
+        return text
+    if used_count >= max(0, int(settings.audio_narration_enhance_max_per_scene)):
+        return text
+    if float(intensity) < float(settings.audio_narration_enhance_min_intensity):
+        return text
+    base = (text or "").strip()
+    if not base:
+        return base
+    # Keep enhancements sparse and predictable: roughly one every 3 lines.
+    if ((index + 1) % 3) != 0 and index != max(0, total - 1):
+        return base
+    if len(base) > 120:
+        return base
+    bridge = _ai_narration_bridge(base, emotion, intensity, scene_type)
+    if not bridge:
+        return base
+    return f"{bridge} {base}"
+
+
 def process_scene(
     scene: dict[str, Any],
     scene_lines: list[SrtTimelineLine],
@@ -93,6 +210,7 @@ def process_scene(
     prev_voice_end = 0.0
     prev_pause = 0.0
     music_type_votes: list[str] = []
+    enhance_used = 0
 
     max_refine_lines = max(0, int(settings.openai_emotion_refine_max_lines))
     for idx, line in enumerate(scene_lines):
@@ -113,7 +231,7 @@ def process_scene(
         else:
             refined_emotion, refined_intensity = base_emotion, base_intensity
         curve = _scene_curve_value(idx, len(scene_lines))
-        effective_intensity = _clamp01((float(refined_intensity) * 0.65) + (curve * 0.35))
+        effective_intensity = _clamp01((float(refined_intensity) * 0.74) + (curve * 0.26))
         sl.emotion = refined_emotion
         sl.emotion_intensity = effective_intensity
         profile = get_character_profile(sl, int(line.index))
@@ -122,29 +240,62 @@ def process_scene(
             sl.emotion,
             effective_intensity,
             str(scene.get("scene_type") or scene.get("description", "neutral")),
+            speaker=speaker_key,
         )
         profile = {**profile, **plan.get("voice_settings", {})}
         if str(plan.get("music_type", "")).strip():
             music_type_votes.append(str(plan.get("music_type")))
         sl.pause_sec = float(plan.get("pause", pause_seconds(sl.emotion, effective_intensity)))
-        sl.rendered_text = render_speech(
+        # Display / subtitles: OCR + delivery styling, no TTS-only pronunciation rewrites.
+        display_rendered = render_speech_for_display(
             sl.narration,
             sl.emotion,
             effective_intensity,
             speech_mode=str(plan.get("speech_mode", "none")),
         )
+        # TTS: same pipeline + normalize_stretched_letters etc. for speakability.
+        tts_rendered = render_speech(
+            sl.narration,
+            sl.emotion,
+            effective_intensity,
+            speech_mode=str(plan.get("speech_mode", "none")),
+        )
+        enhanced_display = _maybe_enhance_narration(
+            display_rendered,
+            sl.emotion,
+            effective_intensity,
+            str(scene.get("scene_type") or scene.get("description", "neutral")),
+            idx,
+            len(scene_lines),
+            enhance_used,
+        )
+        if enhanced_display != display_rendered:
+            enhance_used += 1
+        sl.rendered_text = enhanced_display
+        tts_text = _mirror_narration_bridge_to_tts(enhanced_display, display_rendered, tts_rendered)
+        if not tts_text.strip():
+            tts_text = tts_rendered
         voice_path = scene_audio_dir / f"line_{idx:03d}.mp3"
         local_start = max(0.0, float(line.start_sec) - scene_start_sec)
         start = max(local_start, prev_voice_end + prev_pause)
         slot_dur = max(0.05, float(line.end_sec - line.start_sec))
-        if sl.rendered_text:
+        if tts_text.strip():
+            prev_txt: str | None = None
+            next_txt: str | None = None
+            if getattr(settings, "elevenlabs_tts_line_context", True):
+                if idx > 0:
+                    prev_txt = (scene_lines[idx - 1].text or "").strip() or None
+                if idx + 1 < len(scene_lines):
+                    next_txt = (scene_lines[idx + 1].text or "").strip() or None
             tts_func(
-                text=sl.rendered_text,
+                text=tts_text,
                 voice_id=sl.voice,
                 emotion=sl.emotion,
                 intensity=effective_intensity,
                 output_path=voice_path,
                 profile=profile,
+                previous_text=prev_txt,
+                next_text=next_txt,
             )
             voice_dur = max(0.05, probe_func(voice_path))
         else:
@@ -153,8 +304,12 @@ def process_scene(
         voice_events.append(AudioEvent(type="voice", file=str(voice_path), start=start, duration=voice_dur, line_index=idx))
 
         explicit_sfx = [str(x).strip().lower() for x in (line.sfx_cues or []) if str(x).strip()]
-        merged_sfx = _merge_sfx_plan(list(plan.get("sfx_plan", [])), explicit_sfx)
-        if settings.elevenlabs_sfx_enabled and merged_sfx:
+        merged_sfx = (
+            _merge_sfx_plan(list(plan.get("sfx_plan", [])), explicit_sfx)
+            if settings.elevenlabs_sfx_enabled
+            else []
+        )
+        if merged_sfx:
             sfx_limit = max(1 if curve < 0.55 else 2, len(explicit_sfx))
             for sfx_i, evt in enumerate(merged_sfx[:sfx_limit], start=1):
                 prompt = _SFX_PROMPTS.get(str(evt), "")
@@ -163,7 +318,7 @@ def process_scene(
                 sfx_path = scene_audio_dir / f"sfx_{idx:03d}_{sfx_i}.mp3"
                 generate_sfx_event(prompt, 0.75, sfx_path)
                 sfx_dur = max(0.05, probe_func(sfx_path))
-                aligned = align_sfx(sl.rendered_text or sl.narration, voice_dur, str(evt))
+                aligned = align_sfx(tts_text or sl.narration, voice_dur, str(evt))
                 sfx_events.append(
                     AudioEvent(
                         type="sfx",
@@ -197,11 +352,17 @@ def process_scene(
         segments[i].pause_sec = gap
 
     scene_music_type = _dominant_music_type(music_type_votes)
+    sid = int(scene.get("scene_id", 0))
     try:
-        scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir, scene_music_type)
+        scene_music, music_src, music_reason = resolve_music_func(
+            script_lines, scene_audio_dir, scene_music_type, sid
+        )
     except TypeError:
-        # Backward compatible test patch points with 2-arg resolve_music_bed.
-        scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir)
+        try:
+            scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir, scene_music_type)
+        except TypeError:
+            # Backward compatible test patch points with 2-arg resolve_music_bed.
+            scene_music, music_src, music_reason = resolve_music_func(script_lines, scene_audio_dir)
     music_event = AudioEvent(type="music", file=str(scene_music), start=0.0, duration=0.0, line_index=-1) if scene_music else None
     events = build_cinematic_timeline(voice_events, sfx_events, music_event)
     narration_path = scene_audio_dir / f"scene_{int(scene.get('scene_id', 0)):03d}.mp3"

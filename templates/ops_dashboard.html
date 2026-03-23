@@ -4,65 +4,87 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/ops.css" />
   </head>
   <body>
     <header class="topbar">
-      <h1>Operations Dashboard</h1>
-      <p>SRT-driven cinematic recitation backend operations and observation</p>
+      <h1>Pipeline Ops</h1>
+      <p>Generate webtoon episodes, browse runs, preview YouTube vs reel deliverables</p>
     </header>
 
-    <main class="grid">
-      <section class="card">
-        <h2>Start Job</h2>
-        <div class="catalog-box">
-          <h3 style="margin:0 0 8px 0;">Webtoon Catalog</h3>
-          <label>Genre Filter</label>
-          <input id="catalog-genre" type="text" placeholder="action / romance / fantasy ..." />
-          <label>Search Manga</label>
-          <input id="catalog-query" type="text" placeholder="omniscient reader..." />
-          <button id="catalog-search" type="button">Search Catalog</button>
-          <button id="catalog-refresh" type="button">Refresh Catalog</button>
-          <small id="catalog-status" style="display:block;color:#9ca3af;margin-top:6px;"></small>
-          <label>Pick Manga Title</label>
-          <select id="catalog-title"></select>
-          <label>Episode Range</label>
-          <div style="display:flex;gap:10px;">
-            <input id="episode_from" type="number" min="0" placeholder="from" />
-            <input id="episode_to" type="number" min="0" placeholder="to" />
-          </div>
-          <label style="margin-top:8px;">Select Episodes (multi-select)</label>
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input id="episode_select_all" type="checkbox" />
-            <span>Select all episodes</span>
-          </label>
-          <div id="episode-picker" style="max-height:170px;overflow:auto;border:1px solid #2c313a;border-radius:8px;padding:8px;margin-top:6px;">
-            <small style="color:#9ca3af;">Pick title to load episode checkboxes.</small>
-          </div>
-          <label>Page Range (optional)</label>
-          <div style="display:flex;gap:10px;">
-            <input id="page_from" type="number" min="0" placeholder="page from" />
-            <input id="page_to" type="number" min="0" placeholder="page to" />
-          </div>
-          <label>Panel Range (optional)</label>
-          <div style="display:flex;gap:10px;">
-            <input id="panel_from" type="number" min="0" placeholder="panel from" />
-            <input id="panel_to" type="number" min="0" placeholder="panel to" />
-          </div>
-          <button id="generate-range" type="button">Generate Episode Range</button>
-          <small id="panel-filter-note" style="display:block;color:#9ca3af;margin-top:6px;">
-            Page/Panel filters are applied only when exactly one episode is selected.
-          </small>
-          <pre id="range-result"></pre>
-        </div>
-        <div id="form-error" class="inline-error hidden"></div>
-      </section>
+    <div id="form-error" class="inline-error hidden"></div>
 
-      <section class="card">
+    <section class="toolbar" aria-label="Catalog and generate">
+      <div class="field field-sm">
+        <label for="catalog-genre">Genre</label>
+        <select id="catalog-genre" title="Filter by genre (no reload)">
+          <option value="">All genres</option>
+        </select>
+      </div>
+      <div class="field field-md">
+        <label for="catalog-query">Search</label>
+        <input id="catalog-query" type="text" placeholder="Title keywords…" />
+      </div>
+      <div class="toolbar-actions">
+        <button id="catalog-search" type="button" class="btn-ghost">Search</button>
+        <button id="catalog-refresh" type="button" class="btn-ghost">Refresh catalog</button>
+      </div>
+      <div class="field field-grow">
+        <label for="catalog-title">Manga</label>
+        <select id="catalog-title">
+          <option value="">Select title…</option>
+        </select>
+      </div>
+      <div class="toolbar-actions">
+        <button id="generate-range" type="button" class="btn-primary">Generate selected</button>
+      </div>
+      <div class="toolbar" style="padding-top: 0; border-bottom: none;">
+        <div class="field field-sm">
+          <label for="episode-range-from">Ep. from</label>
+          <input id="episode-range-from" type="number" min="0" step="1" placeholder="min" title="Minimum episode number (inclusive)" />
+        </div>
+        <div class="field field-sm">
+          <label for="episode-range-to">Ep. to</label>
+          <input id="episode-range-to" type="number" min="0" step="1" placeholder="max" title="Maximum episode number (inclusive)" />
+        </div>
+        <div class="toolbar-actions" style="align-items: flex-end;">
+          <button id="episode-range-apply" type="button" class="btn-ghost">Select range in list</button>
+          <button id="episode-generate-range" type="button" class="btn-primary">Generate episode range</button>
+        </div>
+      </div>
+    </section>
+    <p id="catalog-status" class="catalog-inline" style="padding: 0 24px 8px; margin: 0;"></p>
+    <div id="catalog-not-found" class="catalog-not-found hidden" role="status" aria-live="polite">
+      <p>
+        No series match your search. Try another keyword, pick a different genre, or refresh the catalog to load
+        titles from Webtoon (no link required).
+      </p>
+      <button type="button" id="catalog-not-found-refresh" class="btn-ghost">Refresh catalog now</button>
+    </div>
+
+    <section class="episode-panel" aria-label="Episode selection">
+      <div class="episode-panel-head">
+        <h2>Episodes</h2>
+        <div>
+          <button type="button" id="episode-select-all" class="btn-ghost" style="padding: 6px 12px; margin: 0;">Select all</button>
+          <button type="button" id="episode-clear" class="btn-ghost" style="padding: 6px 12px; margin: 0;">Clear</button>
+        </div>
+      </div>
+      <p id="episode-cache-hint" class="catalog-inline" style="margin: 0 0 8px; display: none;" aria-live="polite"></p>
+      <div id="episode-picker" class="episode-list">
+        <span class="catalog-inline">Choose a manga title to list episodes. Check episodes to queue; optional panel from/to per row.</span>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <section class="card" aria-label="Runs">
         <div class="card-header">
-          <h2>Recent Runs</h2>
+          <h2>Runs</h2>
           <div class="header-actions">
-            <button id="refresh-runs">Refresh</button>
+            <button id="refresh-runs" type="button" class="btn-ghost" style="margin: 0; padding: 6px 12px;">Refresh</button>
             <label class="auto-refresh">
               <input id="auto-refresh" type="checkbox" checked />
               Auto
@@ -70,59 +92,87 @@
           </div>
         </div>
         <div class="filters">
-          <input id="run-query" type="text" placeholder="Search run path or source URL..." />
+          <input id="run-query" type="text" placeholder="Filter path or URL…" />
           <select id="run-status">
-            <option value="">all statuses</option>
-            <option value="completed">completed</option>
-            <option value="failed">failed</option>
-            <option value="in_progress">in progress</option>
-            <option value="unknown">unknown</option>
+            <option value="">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="in_progress">In progress</option>
+            <option value="unknown">Unknown</option>
           </select>
         </div>
         <div id="runs-list" class="runs-list"></div>
         <div class="pager">
-          <button id="prev-page">Prev</button>
+          <button id="prev-page" type="button" class="btn-ghost">Prev</button>
           <span id="page-label">Page 1</span>
-          <button id="next-page">Next</button>
+          <button id="next-page" type="button" class="btn-ghost">Next</button>
         </div>
       </section>
 
-      <section class="card full">
-        <h2>Run Detail</h2>
-        <div id="run-summary" class="run-summary"></div>
-        <div id="detail-error" class="inline-error hidden"></div>
-        <pre id="run-detail">Select a run to inspect stage-level report.</pre>
-      </section>
-
-      <section class="card full">
-        <h2>Video Planner & Step Visualizer</h2>
-        <p class="subtle">See stage-by-stage execution and status for the selected run.</p>
-        <div id="step-visualizer" class="step-visualizer">
-          <div class="narration-empty">Select a run to view planner steps.</div>
+      <section class="card player-card" aria-label="Player">
+        <div class="player-head">
+          <div>
+            <div class="title" id="player-title">Select a run</div>
+            <div class="sub" id="player-sub">Choose a run from the list to preview YouTube or reel outputs.</div>
+          </div>
+        </div>
+        <div class="player-video-wrap">
+          <div id="player-loading" class="player-loading hidden">
+            <div class="spinner" aria-hidden="true"></div>
+            <span>Generating video…</span>
+          </div>
+          <video id="run-video" controls preload="metadata" playsinline></video>
+        </div>
+        <div class="deliverables">
+          <div class="deliver-col">
+            <h4>YouTube</h4>
+            <ul id="list-youtube" class="asset-list"></ul>
+          </div>
+          <div class="deliver-col">
+            <h4>Reel</h4>
+            <ul id="list-reel" class="asset-list"></ul>
+          </div>
         </div>
       </section>
+    </div>
 
-      <section class="card full">
-        <h2>Media Preview</h2>
-        <video id="run-video" controls preload="metadata" class="run-video hidden"></video>
-      </section>
-
-      <section class="card full">
-        <h2>SRT Cinematic Analysis</h2>
-        <p class="subtle">Per-line speaker/emotion/intensity + rendered performance text.</p>
-        <div id="narration-visual" class="narration-visual">
-          <div class="narration-empty">Select a run to preview narration lines.</div>
+    <div class="details-stack">
+      <details class="disclosure" open>
+        <summary>Run report</summary>
+        <div class="inner">
+          <div id="detail-error" class="inline-error hidden" style="margin: 0 0 10px;"></div>
+          <div id="run-summary" class="run-summary"></div>
+          <pre id="run-detail">Select a run.</pre>
         </div>
-      </section>
-    </main>
+      </details>
+      <details class="disclosure">
+        <summary>Stage planner</summary>
+        <div class="inner">
+          <div id="step-visualizer" class="step-visualizer">
+            <div class="narration-empty">Select a run.</div>
+          </div>
+        </div>
+      </details>
+      <details class="disclosure">
+        <summary>SRT / narration lines</summary>
+        <div class="inner">
+          <div id="narration-visual" class="narration-visual">
+            <div class="narration-empty">Select a run.</div>
+          </div>
+        </div>
+      </details>
+    </div>
 
     <script>
       const PAGE_SIZE = 20;
       let page = 0;
       let currentRunId = null;
+      let currentRunRow = null;
       let autoTimer = null;
       let catalogTitles = [];
       let titleEpisodes = [];
+      let currentTitleSlug = "";
+      let allRunsCache = [];
 
       function setError(elId, msg) {
         const el = document.getElementById(elId);
@@ -152,15 +202,33 @@
 
       function badge(status) {
         const safe = status || "unknown";
-        return `<span class="status status-${safe}">${safe.replace("_", " ")}</span>`;
+        return `<span class="status status-${safe}">${safe.replace(/_/g, " ")}</span>`;
       }
 
       function runDetailUrl(runId) {
         return `/ops/api/runs/${encodeURIComponent(runId)}`;
       }
 
-      function runVideoUrl(runId) {
-        return `/ops/api/runs/${encodeURIComponent(runId)}/video`;
+      function youtubeFileUrl(runId) {
+        return `/ops/api/runs/${encodeURIComponent(runId)}/files/youtube`;
+      }
+
+      function reelMasterFileUrl(runId) {
+        return `/ops/api/runs/${encodeURIComponent(runId)}/files/reel`;
+      }
+
+      function reelFileUrl(runId, chunkFile) {
+        return `/ops/api/runs/${encodeURIComponent(runId)}/files/reel/${encodeURIComponent(chunkFile)}`;
+      }
+
+      function parseEpisodeHint(runId) {
+        const m = runId.match(/episode-(\d+)/);
+        return m ? parseInt(m[1], 10) : null;
+      }
+
+      function runMatchesTitle(run, slug) {
+        if (!slug) return true;
+        return (run.run_id || "").includes(slug);
       }
 
       async function fetchRuns() {
@@ -173,34 +241,45 @@
         if (query) params.set("query", query);
         if (status) params.set("status", status);
         const data = await fetchJson(`/ops/api/runs?${params.toString()}`);
+        allRunsCache = data.runs || [];
+        const slug = currentTitleSlug;
         const list = document.getElementById("runs-list");
         list.innerHTML = "";
-        if (!data.runs || data.runs.length === 0) {
-          list.innerHTML = `<div class="narration-empty">No runs found.</div>`;
+        const rows = allRunsCache.filter((r) => runMatchesTitle(r, slug));
+        if (rows.length === 0) {
+          list.innerHTML = `<div class="narration-empty">No runs${slug ? " for this title" : ""}.</div>`;
         }
-        for (const run of data.runs || []) {
+        for (const run of rows) {
           const node = document.createElement("div");
-          node.className = "run-item";
-          const stage = run.failed_stage ? `failed at ${run.failed_stage}` : (run.stages || []).slice(-1)[0] || "-";
+          node.className = "run-item" + (run.run_id === currentRunId ? " active" : "");
+          node.dataset.runId = run.run_id;
+          node.setAttribute("role", "button");
+          node.tabIndex = 0;
+          const stage = run.failed_stage ? `failed @ ${run.failed_stage}` : (run.stages || []).slice(-1)[0] || "—";
+          const epHint = parseEpisodeHint(run.run_id);
           node.innerHTML = `
             <div>
-              <strong>${run.run_id}</strong><br/>
-              <small>${run.created_at}</small><br/>
+              <strong>${run.run_id}</strong>
+              ${epHint !== null ? `<small>episode ${epHint}</small>` : ""}
+              <small>${run.created_at}</small>
               <small>${run.input?.pdf_path || ""}</small>
             </div>
-            <div>
+            <div style="text-align:right;flex-shrink:0;">
               ${badge(run.status)}
-              <span class="${run.has_video ? "ok" : "warn"}">${run.has_video ? "video" : "no video"}</span>
+              <span class="${run.has_video ? "ok" : "warn"}">${run.has_video ? "video" : "no video"}</span><br/>
               <small>${stage}</small>
-              <button data-id="${run.run_id}" class="inspect-btn">Inspect</button>
             </div>
           `;
+          node.addEventListener("click", () => inspectRun(run.run_id, run));
+          node.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              inspectRun(run.run_id, run);
+            }
+          });
           list.appendChild(node);
         }
         document.getElementById("page-label").textContent = `Page ${page + 1}`;
-        document.querySelectorAll(".inspect-btn").forEach((btn) => {
-          btn.addEventListener("click", () => inspectRun(btn.getAttribute("data-id")));
-        });
       }
 
       function setCatalogControlsEnabled(enabled) {
@@ -210,20 +289,21 @@
           "catalog-search",
           "catalog-refresh",
           "catalog-title",
-          "episode_from",
-          "episode_to",
-          "episode_select_all",
-          "page_from",
-          "page_to",
-          "panel_from",
-          "panel_to",
-          "generate-range"
+          "generate-range",
+          "episode-select-all",
+          "episode-clear",
+          "episode-range-from",
+          "episode-range-to",
+          "episode-range-apply",
+          "episode-generate-range"
         ];
         for (const id of ids) {
           const el = document.getElementById(id);
-          if (!el) continue;
-          el.disabled = !enabled;
+          if (el) el.disabled = !enabled;
         }
+        document.querySelectorAll(".episode-item").forEach((el) => {
+          el.disabled = !enabled;
+        });
       }
 
       async function refreshCatalogStatus() {
@@ -231,10 +311,10 @@
         const enabled = !!status?.enabled;
         setCatalogControlsEnabled(enabled);
         const text = !enabled
-          ? "Catalog is disabled. Set WEBTOON_CATALOG_ENABLED=true in .env and restart."
+          ? "Catalog off — set WEBTOON_CATALOG_ENABLED=true"
           : status?.updated_at
-            ? `Catalog updated: ${status.updated_at} | titles: ${status?.stats?.title_count || 0} | episodes: ${status?.stats?.episode_count || 0}`
-            : "Catalog enabled but not built yet. Click Refresh Catalog.";
+            ? `Updated ${status.updated_at} · ${status?.stats?.title_count || 0} titles`
+            : "Catalog enabled — refresh to build.";
         document.getElementById("catalog-status").textContent = text;
       }
 
@@ -243,7 +323,7 @@
         select.innerHTML = "";
         const empty = document.createElement("option");
         empty.value = "";
-        empty.textContent = "Select manga title...";
+        empty.textContent = "Select manga…";
         select.appendChild(empty);
         for (const item of items || []) {
           const opt = document.createElement("option");
@@ -254,7 +334,7 @@
         if ((items || []).length === 0) {
           const no = document.createElement("option");
           no.value = "";
-          no.textContent = "No manga found for current search.";
+          no.textContent = "No results";
           select.appendChild(no);
         }
       }
@@ -263,71 +343,190 @@
         const box = document.getElementById("episode-picker");
         box.innerHTML = "";
         if (!episodes || episodes.length === 0) {
-          box.innerHTML = `<small style="color:#9ca3af;">No episodes found for selected title.</small>`;
+          box.innerHTML = `<span class="catalog-inline">No episodes for this title.</span>`;
           return;
         }
         for (const ep of episodes) {
-          const wrap = document.createElement("label");
-          wrap.style.display = "block";
-          wrap.style.marginBottom = "4px";
           const no = Number(ep.episode_no || 0);
-          wrap.innerHTML = `<input type="checkbox" class="episode-item" value="${no}" /> Episode ${no} (${ep.episode_slug || "episode"})`;
-          box.appendChild(wrap);
+          const row = document.createElement("div");
+          row.className = "ep-row";
+          row.innerHTML = `
+            <input type="checkbox" class="episode-item" data-episode-no="${no}" aria-label="Episode ${no}" />
+            <span class="ep-label">Ep. ${no}</span>
+            <span class="ep-panels">
+              <span>panels</span>
+              <input type="number" min="0" class="panel-from" placeholder="from" title="Optional panel from" />
+              <span>–</span>
+              <input type="number" min="0" class="panel-to" placeholder="to" title="Optional panel to" />
+            </span>
+          `;
+          box.appendChild(row);
         }
       }
 
-      function selectedEpisodeNumbers() {
-        const nodes = document.querySelectorAll(".episode-item:checked");
-        return Array.from(nodes).map((n) => Number(n.value)).filter((v) => Number.isFinite(v));
+      function collectEpisodeSpecs() {
+        const specs = [];
+        document.querySelectorAll(".ep-row").forEach((row) => {
+          const cb = row.querySelector(".episode-item");
+          if (!cb || !cb.checked) return;
+          const no = Number(cb.dataset.episodeNo);
+          const pf = row.querySelector(".panel-from")?.value?.trim();
+          const pt = row.querySelector(".panel-to")?.value?.trim();
+          const o = { episode_no: no };
+          if (pf) o.panel_from = Number(pf);
+          if (pt) o.panel_to = Number(pt);
+          specs.push(o);
+        });
+        return specs;
       }
 
-      function panelFilterActive() {
-        return !!(
-          document.getElementById("page_from").value ||
-          document.getElementById("page_to").value ||
-          document.getElementById("panel_from").value ||
-          document.getElementById("panel_to").value
-        );
+      function setVideoSource(url) {
+        const video = document.getElementById("run-video");
+        const loading = document.getElementById("player-loading");
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        video.src = url;
+        loading.classList.add("hidden");
+        video.classList.remove("hidden");
       }
 
-      async function searchCatalog() {
-        const q = document.getElementById("catalog-query").value.trim();
-        const g = document.getElementById("catalog-genre").value.trim();
-        const params = new URLSearchParams({ limit: "120", offset: "0" });
-        if (q) params.set("query", q);
-        if (g) params.set("genre", g);
-        const payload = await fetchJson(`/ops/api/manga?${params.toString()}`);
-        catalogTitles = payload.items || [];
-        renderCatalogTitles(catalogTitles);
+      function clearPlayer() {
+        const video = document.getElementById("run-video");
+        const loading = document.getElementById("player-loading");
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        loading.classList.add("hidden");
+        document.getElementById("list-youtube").innerHTML = "";
+        document.getElementById("list-reel").innerHTML = "";
+        document.getElementById("player-title").textContent = "Select a run";
+        document.getElementById("player-sub").textContent = "Choose a run from the list.";
       }
 
-      async function inspectRun(runId) {
+      function populateDeliverables(runId, detail, runRow) {
+        const ytList = document.getElementById("list-youtube");
+        const reelList = document.getElementById("list-reel");
+        ytList.innerHTML = "";
+        reelList.innerHTML = "";
+        const files = detail?.files || {};
+        const status = runRow?.status || "";
+        const inProg = status === "in_progress";
+        const hasYt = !!files.youtube_video;
+        const hasReelMaster = !!files.reel_video;
+
+        document.getElementById("player-title").textContent = runId;
+        document.getElementById("player-sub").textContent =
+          inProg && !hasYt
+            ? "Pipeline still running — preview when ready."
+            : "Pick YouTube, full portrait reel (90% fill), or a reel chunk.";
+
+        const loading = document.getElementById("player-loading");
+        const video = document.getElementById("run-video");
+
+        if (inProg && !hasYt) {
+          loading.classList.remove("hidden");
+          video.classList.add("hidden");
+        } else {
+          loading.classList.add("hidden");
+          video.classList.remove("hidden");
+        }
+
+        if (hasYt) {
+          const li = document.createElement("li");
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "active";
+          btn.textContent = "video_youtube.mp4 (landscape)";
+          btn.addEventListener("click", () => {
+            ytList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+            reelList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            setVideoSource(youtubeFileUrl(runId));
+          });
+          li.appendChild(btn);
+          ytList.appendChild(li);
+          setVideoSource(youtubeFileUrl(runId));
+        } else {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="catalog-inline">${inProg ? "Not ready yet" : "No YouTube file"}</span>`;
+          ytList.appendChild(li);
+          if (!inProg) {
+            loading.classList.add("hidden");
+            video.classList.add("hidden");
+          }
+        }
+
+        const chunks = files.reel_chunks || [];
+        if (!hasReelMaster && chunks.length === 0) {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="catalog-inline">No reel deliverable</span>`;
+          reelList.appendChild(li);
+        } else {
+          if (hasReelMaster) {
+            const li = document.createElement("li");
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = "video_reel.mp4 (portrait · 90% fill)";
+            btn.addEventListener("click", () => {
+              ytList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+              reelList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+              btn.classList.add("active");
+              setVideoSource(reelMasterFileUrl(runId));
+            });
+            li.appendChild(btn);
+            reelList.appendChild(li);
+          }
+          chunks.forEach((p, i) => {
+            const name = p.split("/").pop() || `chunk-${i}`;
+            const li = document.createElement("li");
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = name;
+            btn.addEventListener("click", () => {
+              ytList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+              reelList.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+              btn.classList.add("active");
+              setVideoSource(reelFileUrl(runId, name));
+            });
+            li.appendChild(btn);
+            reelList.appendChild(li);
+          });
+          if (!hasYt && hasReelMaster) {
+            reelList.querySelector("button")?.classList.add("active");
+            setVideoSource(reelMasterFileUrl(runId));
+          } else if (!hasYt && chunks.length) {
+            const first = chunks[0].split("/").pop();
+            reelList.querySelector("button")?.classList.add("active");
+            setVideoSource(reelFileUrl(runId, first));
+          }
+        }
+      }
+
+      async function inspectRun(runId, runRow) {
         setError("detail-error", "");
         currentRunId = runId;
+        currentRunRow = runRow || null;
         history.replaceState({}, "", `?run_id=${encodeURIComponent(runId)}`);
+        document.querySelectorAll(".run-item").forEach((el) => {
+          el.classList.toggle("active", el.dataset.runId === runId);
+        });
         const data = await fetchJson(runDetailUrl(runId));
         document.getElementById("run-detail").textContent = JSON.stringify(data, null, 2);
         const summary = data?.report?.failed
-          ? `FAILED at ${data.report.failed.stage} (${data.report.failed.error_code || "error"})`
-          : "Ready";
-        document.getElementById("run-summary").textContent = `${runId} • ${summary}`;
+          ? `FAILED @ ${data.report.failed.stage} (${data.report.failed.error_code || "err"})`
+          : "OK";
+        document.getElementById("run-summary").textContent = `${summary} · ${data.path || ""}`;
         renderStepVisualizer(data);
         renderNarration(data);
-        const video = document.getElementById("run-video");
-        if (data?.files?.video) {
-          video.src = runVideoUrl(runId);
-          video.classList.remove("hidden");
-        } else {
-          video.classList.add("hidden");
-          video.removeAttribute("src");
-        }
+        populateDeliverables(runId, data, runRow);
       }
 
       function renderNarration(data) {
         const container = document.getElementById("narration-visual");
         const lines = data?.report?.artifacts?.srt_analysis || [];
         if (!Array.isArray(lines) || lines.length === 0) {
-          container.innerHTML = `<div class="narration-empty">No narration found for this run yet.</div>`;
+          container.innerHTML = `<div class="narration-empty">No narration lines yet.</div>`;
           return;
         }
         container.innerHTML = "";
@@ -340,9 +539,8 @@
               <span class="badge">${idx + 1}</span>
               <span class="emotion">${emotion}</span>
             </header>
-            <small>speaker: ${line.speaker || "unknown_1"} | emotion: ${line.emotion || "neutral"} | intensity: ${line.intensity ?? "-"}</small>
+            <small>${line.speaker || "unknown"} · ${line.emotion || ""} · ${line.intensity ?? "—"}</small>
             <p>${line.performance_text || line.text || ""}</p>
-            <small title="${line.panel_path || ""}">${line.panel_path || ""}</small>
           `;
           container.appendChild(card);
         }
@@ -371,27 +569,71 @@
         ];
         box.innerHTML = "";
         if (!stages || Object.keys(stages).length === 0) {
-          box.innerHTML = `<div class="narration-empty">No stage data yet.</div>`;
+          box.innerHTML = `<div class="narration-empty">No stage data.</div>`;
           return;
         }
         for (const name of stageOrder) {
-          const data = stages[name];
-          let status = "pending";
-          if (data) status = "done";
-          if (failedStage && failedStage === name) status = "failed";
+          const st = stages[name];
+          let stStatus = "pending";
+          if (st) stStatus = "done";
+          if (failedStage && failedStage === name) stStatus = "failed";
           const card = document.createElement("article");
-          card.className = `step-card step-${status}`;
-          const elapsed = Number(data?.elapsed_ms || 0);
+          card.className = `step-card step-${stStatus}`;
+          const elapsed = Number(st?.elapsed_ms || 0);
           card.innerHTML = `
             <header>
               <strong>${name}</strong>
-              <span class="status status-${status}">${status}</span>
+              <span class="status status-${stStatus}">${stStatus}</span>
             </header>
-            <small>${elapsed > 0 ? `elapsed: ${elapsed} ms` : "elapsed: -"}</small>
+            <small>${elapsed > 0 ? `${elapsed} ms` : "—"}</small>
           `;
           box.appendChild(card);
         }
       }
+
+      async function populateGenreSelect() {
+        let data;
+        try {
+          data = await fetchJson("/ops/api/manga/genres");
+        } catch {
+          return;
+        }
+        const sel = document.getElementById("catalog-genre");
+        const prev = sel.value;
+        const genres = data.genres || [];
+        sel.innerHTML = "";
+        const all = document.createElement("option");
+        all.value = "";
+        all.textContent = "All genres";
+        sel.appendChild(all);
+        for (const g of genres) {
+          const opt = document.createElement("option");
+          opt.value = g;
+          opt.textContent = g;
+          sel.appendChild(opt);
+        }
+        if (prev && [...sel.options].some((o) => o.value === prev)) {
+          sel.value = prev;
+        }
+      }
+
+      async function searchCatalog() {
+        const q = document.getElementById("catalog-query").value.trim();
+        const g = document.getElementById("catalog-genre").value.trim();
+        const params = new URLSearchParams({ limit: "120", offset: "0" });
+        if (q) params.set("query", q);
+        if (g) params.set("genre", g);
+        const payload = await fetchJson(`/ops/api/manga?${params.toString()}`);
+        catalogTitles = payload.items || [];
+        renderCatalogTitles(catalogTitles);
+        const nf = document.getElementById("catalog-not-found");
+        if (nf) {
+          const noMatch = q.length > 0 && Number(payload.total || 0) === 0;
+          nf.classList.toggle("hidden", !noMatch);
+        }
+      }
+
+      let catalogSearchDebounce = null;
 
       document.getElementById("refresh-runs").addEventListener("click", async () => {
         try {
@@ -402,19 +644,19 @@
       });
       document.getElementById("run-query").addEventListener("input", () => {
         page = 0;
-        fetchRuns().catch((err) => setError("detail-error", String(err)));
+        fetchRuns().catch((err) => setError("form-error", String(err)));
       });
       document.getElementById("run-status").addEventListener("change", () => {
         page = 0;
-        fetchRuns().catch((err) => setError("detail-error", String(err)));
+        fetchRuns().catch((err) => setError("form-error", String(err)));
       });
       document.getElementById("prev-page").addEventListener("click", () => {
         if (page > 0) page -= 1;
-        fetchRuns().catch((err) => setError("detail-error", String(err)));
+        fetchRuns().catch((err) => setError("form-error", String(err)));
       });
       document.getElementById("next-page").addEventListener("click", () => {
         page += 1;
-        fetchRuns().catch((err) => setError("detail-error", String(err)));
+        fetchRuns().catch((err) => setError("form-error", String(err)));
       });
       document.getElementById("auto-refresh").addEventListener("change", (e) => {
         if (e.target.checked) {
@@ -426,119 +668,200 @@
       });
 
       document.getElementById("catalog-search").addEventListener("click", () => {
-        searchCatalog().catch((err) => setError("detail-error", String(err)));
+        searchCatalog().catch((err) => setError("form-error", String(err)));
+      });
+
+      document.getElementById("catalog-query").addEventListener("input", () => {
+        clearTimeout(catalogSearchDebounce);
+        catalogSearchDebounce = setTimeout(() => {
+          searchCatalog().catch((err) => setError("form-error", String(err)));
+        }, 420);
+      });
+
+      document.getElementById("catalog-genre").addEventListener("change", () => {
+        searchCatalog().catch((err) => setError("form-error", String(err)));
       });
 
       document.getElementById("catalog-refresh").addEventListener("click", async () => {
         try {
-          document.getElementById("catalog-status").textContent = "Refreshing catalog...";
+          document.getElementById("catalog-status").textContent = "Refreshing…";
           await fetchJson("/ops/api/manga/refresh", { method: "POST" });
           await refreshCatalogStatus();
+          await populateGenreSelect();
           await searchCatalog();
+          const nf = document.getElementById("catalog-not-found");
+          if (nf) nf.classList.add("hidden");
         } catch (err) {
-          setError("detail-error", String(err));
+          setError("form-error", String(err));
         }
       });
 
+      document.getElementById("catalog-not-found-refresh").addEventListener("click", async () => {
+        document.getElementById("catalog-refresh").click();
+      });
+
+
       document.getElementById("catalog-title").addEventListener("change", async (e) => {
         const titleSlug = e.target.value;
-        document.getElementById("episode_select_all").checked = false;
+        currentTitleSlug = titleSlug;
         titleEpisodes = [];
         renderEpisodePicker([]);
+        const hintEl = document.getElementById("episode-cache-hint");
+        if (hintEl) {
+          hintEl.style.display = "none";
+          hintEl.textContent = "";
+        }
+        const r1 = document.getElementById("episode-range-from");
+        const r2 = document.getElementById("episode-range-to");
+        if (r1) r1.value = "";
+        if (r2) r2.value = "";
+        page = 0;
+        fetchRuns().catch(() => null);
         if (!titleSlug) return;
         try {
           const data = await fetchJson(`/ops/api/manga/${encodeURIComponent(titleSlug)}/episodes`);
           const episodes = data.episodes || [];
           titleEpisodes = episodes;
-          renderEpisodePicker(episodes);
-          if (episodes.length > 0) {
-            document.getElementById("episode_from").value = String(episodes[0].episode_no || 0);
-            document.getElementById("episode_to").value = String(episodes[episodes.length - 1].episode_no || 0);
+          const hint = document.getElementById("episode-cache-hint");
+          if (hint) {
+            if (data.source === "webtoon_catalog_cache") {
+              hint.style.display = "block";
+              const file = data.catalog_file || "webtoon_catalog.json";
+              hint.textContent = `Loaded ${data.total || episodes.length} episode(s) from crawler cache (${file}). Range tools use min/max episode numbers present here — run Refresh catalog after changing WEBTOON_CATALOG_MAX_EPISODES_PER_TITLE / MAX_LIST_PAGES for fuller lists.`;
+            } else {
+              hint.style.display = "none";
+              hint.textContent = "";
+            }
           }
+          renderEpisodePicker(episodes);
         } catch (err) {
-          setError("detail-error", String(err));
+          setError("form-error", String(err));
         }
       });
 
-      document.getElementById("episode_select_all").addEventListener("change", (e) => {
-        const checked = !!e.target.checked;
+      document.getElementById("episode-select-all").addEventListener("click", () => {
         document.querySelectorAll(".episode-item").forEach((el) => {
-          el.checked = checked;
+          el.checked = true;
         });
+      });
+      document.getElementById("episode-clear").addEventListener("click", () => {
+        document.querySelectorAll(".episode-item").forEach((el) => {
+          el.checked = false;
+        });
+      });
+
+      document.getElementById("episode-range-apply").addEventListener("click", () => {
+        const rawLo = document.getElementById("episode-range-from").value;
+        const rawHi = document.getElementById("episode-range-to").value;
+        if (rawLo === "" || rawHi === "") {
+          setError("form-error", "Enter both min and max episode numbers to select a range.");
+          return;
+        }
+        const lo = Number(rawLo);
+        const hi = Number(rawHi);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+          setError("form-error", "Episode range must be valid numbers.");
+          return;
+        }
+        const a = Math.min(lo, hi);
+        const b = Math.max(lo, hi);
+        setError("form-error", "");
+        let n = 0;
+        document.querySelectorAll(".episode-item").forEach((el) => {
+          const no = Number(el.dataset.episodeNo);
+          const on = Number.isFinite(no) && no >= a && no <= b;
+          el.checked = on;
+          if (on) n += 1;
+        });
+        if (n === 0) {
+          setError("form-error", `No episodes in cache between ${a} and ${b}. Refresh catalog or widen the range.`);
+        }
+      });
+
+      document.getElementById("episode-generate-range").addEventListener("click", async () => {
+        const title_slug = document.getElementById("catalog-title").value;
+        if (!title_slug) {
+          setError("form-error", "Select a manga title.");
+          return;
+        }
+        const rawLo = document.getElementById("episode-range-from").value;
+        const rawHi = document.getElementById("episode-range-to").value;
+        if (rawLo === "" || rawHi === "") {
+          setError("form-error", "Enter min and max episode numbers for range generation.");
+          return;
+        }
+        const lo = Number(rawLo);
+        const hi = Number(rawHi);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+          setError("form-error", "Episode range must be valid numbers.");
+          return;
+        }
+        const episode_from = Math.min(Math.floor(lo), Math.floor(hi));
+        const episode_to = Math.max(Math.floor(lo), Math.floor(hi));
+        setError("form-error", "");
+        try {
+          await fetchJson("/ops/api/generate-range", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title_slug, episode_from, episode_to }),
+          });
+          await fetchRuns();
+        } catch (err) {
+          setError("form-error", String(err));
+        }
       });
 
       document.getElementById("generate-range").addEventListener("click", async () => {
         const title_slug = document.getElementById("catalog-title").value;
         if (!title_slug) {
-          setError("detail-error", "Select a manga title first.");
+          setError("form-error", "Select a manga title.");
           return;
         }
-        const fromV = document.getElementById("episode_from").value;
-        const toV = document.getElementById("episode_to").value;
-        const selectedNos = selectedEpisodeNumbers();
-        const selectAll = document.getElementById("episode_select_all").checked;
-        const payload = {
-          title_slug
-        };
-        if (selectAll) {
-          payload.select_all_episodes = true;
-        } else if (selectedNos.length > 0) {
-          payload.episode_numbers = selectedNos;
-        } else {
-          if (!fromV || !toV) {
-            setError("detail-error", "Select episodes (checkboxes) or provide episode range.");
-            return;
-          }
-          payload.episode_from = Number(fromV);
-          payload.episode_to = Number(toV);
-        }
-        const pageFrom = document.getElementById("page_from").value;
-        const pageTo = document.getElementById("page_to").value;
-        const panelFrom = document.getElementById("panel_from").value;
-        const panelTo = document.getElementById("panel_to").value;
-        const rangeCountHint =
-          selectAll ? (titleEpisodes?.length || 2) :
-          selectedNos.length > 0 ? selectedNos.length :
-          (fromV && toV ? Math.max(1, Math.abs(Number(toV) - Number(fromV)) + 1) : 0);
-        if (panelFilterActive() && rangeCountHint !== 1) {
-          setError("detail-error", "Page/Panel filters work only when exactly one episode is selected.");
+        const episode_specs = collectEpisodeSpecs();
+        if (episode_specs.length === 0) {
+          setError("form-error", "Check at least one episode.");
           return;
         }
-        if (pageFrom) payload.page_from = Number(pageFrom);
-        if (pageTo) payload.page_to = Number(pageTo);
-        if (panelFrom) payload.panel_from = Number(panelFrom);
-        if (panelTo) payload.panel_to = Number(panelTo);
-        const out = document.getElementById("range-result");
-        out.textContent = "Queue running...";
+        setError("form-error", "");
         try {
-          const data = await fetchJson("/ops/api/generate-range", {
+          await fetchJson("/ops/api/generate-range", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ title_slug, episode_specs }),
           });
-          out.textContent = JSON.stringify(data, null, 2);
           await fetchRuns();
         } catch (err) {
-          out.textContent = "";
-          setError("detail-error", String(err));
+          setError("form-error", String(err));
         }
       });
 
       const params = new URLSearchParams(window.location.search);
       const preselected = params.get("run_id");
       fetchRuns()
-        .then(() => {
-          return refreshCatalogStatus();
-        })
-        .then(() => {
-          return searchCatalog();
-        })
+        .then(() => refreshCatalogStatus())
+        .then(() => populateGenreSelect())
+        .then(() => searchCatalog())
         .then(() => {
           if (preselected) {
-            return inspectRun(preselected);
+            return fetchJson(runDetailUrl(preselected))
+              .then((detail) => {
+                const hasVid = !!(detail.files && detail.files.youtube_video);
+                const st = detail?.report?.failed
+                  ? "failed"
+                  : hasVid
+                    ? "completed"
+                    : "in_progress";
+                const run =
+                  allRunsCache.find((r) => r.run_id === preselected) || {
+                    run_id: preselected,
+                    status: st,
+                  };
+                return inspectRun(preselected, run);
+              })
+              .catch(() => inspectRun(preselected, { run_id: preselected, status: "unknown" }));
           }
         })
-        .catch((err) => setError("detail-error", String(err)));
+        .catch((err) => setError("form-error", String(err)));
       autoTimer = setInterval(() => fetchRuns().catch(() => null), 8000);
     </script>
   </body>

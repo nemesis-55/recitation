@@ -22,7 +22,10 @@ def list_runs(limit: int = 30, offset: int = 0, query: str | None = None, status
             child = report.parent.parent
             if not child.is_dir():
                 continue
-            video = child / "final" / "video.mp4"
+            final_dir = child / "final"
+            youtube_video = final_dir / "video_youtube.mp4"
+            legacy_video = final_dir / "video.mp4"
+            video = youtube_video if youtube_video.exists() else legacy_video
             run_key = child.relative_to(root).as_posix()
             item = {
                 "run_id": run_key,
@@ -39,6 +42,11 @@ def list_runs(limit: int = 30, offset: int = 0, query: str | None = None, status
                 item["elapsed_sec"] = payload.get("elapsed_sec")
                 item["stages"] = list(payload.get("stages", {}).keys())
                 item["input"] = payload.get("input", {})
+                ve = payload.get("stages", {}).get("video_editor") if isinstance(payload.get("stages"), dict) else None
+                if isinstance(ve, dict):
+                    item["youtube_video_path"] = ve.get("youtube_video_path")
+                    rcp = ve.get("reel_chunk_paths")
+                    item["reel_chunk_paths"] = rcp if isinstance(rcp, list) else []
                 if payload.get("failed"):
                     item["status"] = "failed"
                     item["failed_stage"] = payload["failed"].get("stage")
@@ -80,9 +88,21 @@ def get_run_detail(run_id: str) -> dict[str, Any]:
             detail["report"] = json.loads(report.read_text(encoding="utf-8"))
         except Exception as exc:
             detail["report_error"] = str(exc)
+    final_dir = root / "final"
+    youtube_video = final_dir / "video_youtube.mp4"
+    legacy_video = final_dir / "video.mp4"
+    selected_video = youtube_video if youtube_video.exists() else legacy_video
+    reel_chunks_dir = final_dir / "reels" / "chunks"
+    reel_chunks: list[str] = []
+    if reel_chunks_dir.is_dir():
+        reel_chunks = sorted(str(p) for p in reel_chunks_dir.glob("reel_chunk_*.mp4"))
+    reel_master = final_dir / "video_reel.mp4"
     detail["files"] = {
-        "video": str(root / "final" / "video.mp4") if (root / "final" / "video.mp4").exists() else None,
-        "subtitles": str(root / "final" / "subtitles.srt") if (root / "final" / "subtitles.srt").exists() else None,
+        "video": str(selected_video) if selected_video.exists() else None,
+        "youtube_video": str(youtube_video) if youtube_video.exists() else None,
+        "reel_video": str(reel_master) if reel_master.exists() else None,
+        "reel_chunks": reel_chunks,
+        "subtitles": str(final_dir / "subtitles.srt") if (final_dir / "subtitles.srt").exists() else None,
         "timeline": str(root / "meta" / "timeline.json") if (root / "meta" / "timeline.json").exists() else None,
         "report": str(report) if report.exists() else None,
     }

@@ -69,11 +69,12 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
             )
         ]
 
-    def _fake_animate(_panel_path: str, _duration: float, out_clip: Path):
+    def _fake_animate(*_args, **_kwargs):
+        out_clip = _args[2]
         out_clip.write_bytes(b"clip")
 
-    def _fake_assemble(clips, narration_path: Path, output_path: Path, subtitles_path=None, bgm_path=None):
-        _ = clips, narration_path, subtitles_path, bgm_path
+    def _fake_assemble(clips, narration_path: Path, output_path: Path, subtitles_path=None, bgm_path=None, **kwargs):
+        _ = clips, narration_path, subtitles_path, bgm_path, kwargs
         output_path.write_bytes(b"video")
         return output_path
 
@@ -93,6 +94,7 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("app.routes.generate.load_pdf", _fake_load_pdf)
     monkeypatch.setattr("app.routes.generate.extract_panels", _fake_extract_panels)
     monkeypatch.setattr("app.routes.generate.extract_text_batch", _fake_extract_text_batch)
+    monkeypatch.setattr("app.routes.generate.polish_srt_lines", lambda lines: lines)
     monkeypatch.setattr("app.routes.generate.generate_voice", _fake_generate_voice)
     monkeypatch.setattr("app.routes.generate.build_timeline", _fake_timeline_from_audio)
     monkeypatch.setattr("app.routes.generate.animate_panel", _fake_animate)
@@ -111,7 +113,7 @@ def test_generate_srt_pipeline_smoke(monkeypatch, tmp_path: Path):
     assert payload["status"] == "completed"
     assert payload["quality"] == "cinematic"
     assert payload["audio_path"].endswith("/audio/narration.mp3")
-    assert payload["video_path"].endswith("/final/video.mp4")
+    assert payload["video_path"].endswith("/final/video_youtube.mp4")
 
 
 def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path):
@@ -158,6 +160,7 @@ def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path
             OcrResult(panel_path=str(panel_c), text="three", confidence=0.98, low_confidence=False),
         ],
     )
+    monkeypatch.setattr("app.routes.generate.polish_srt_lines", lambda lines: lines)
 
     def _fake_generate_voice(_srt_lines, panel_paths, audio_dir: Path):
         captured["panel_paths"] = list(panel_paths)
@@ -193,10 +196,16 @@ def test_generate_pipeline_applies_page_panel_ranges(monkeypatch, tmp_path: Path
             )
         ],
     )
-    monkeypatch.setattr("app.routes.generate.animate_panel", lambda _panel_path, _duration, out_clip: out_clip.write_bytes(b"clip"))
+    monkeypatch.setattr(
+        "app.routes.generate.animate_panel",
+        lambda *a, **k: a[2].write_bytes(b"clip"),
+    )
     monkeypatch.setattr(
         "app.routes.generate.assemble_video",
-        lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None: (output_path.write_bytes(b"video"), output_path)[1],
+        lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None, **kwargs: (
+            output_path.write_bytes(b"video"),
+            output_path,
+        )[1],
     )
     monkeypatch.setattr("app.routes.generate.split_video_chunks", lambda source_video, output_dir, max_duration_sec: [])
     monkeypatch.setattr(
@@ -282,10 +291,16 @@ def test_generate_pipeline_prefers_provided_srt(monkeypatch, tmp_path: Path):
             TimelineEntry(panel_path=panels[0].image_path, narration=script_lines[0].narration, start_sec=0.0, end_sec=1.0, duration_sec=1.0)
         ],
     )
-    monkeypatch.setattr("app.routes.generate.animate_panel", lambda _panel_path, _duration, out_clip: out_clip.write_bytes(b"clip"))
+    monkeypatch.setattr(
+        "app.routes.generate.animate_panel",
+        lambda *a, **k: a[2].write_bytes(b"clip"),
+    )
     monkeypatch.setattr(
         "app.routes.generate.assemble_video",
-        lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None: (output_path.write_bytes(b"video"), output_path)[1],
+        lambda clips, narration_path, output_path, subtitles_path=None, bgm_path=None, **kwargs: (
+            output_path.write_bytes(b"video"),
+            output_path,
+        )[1],
     )
     monkeypatch.setattr("app.routes.generate.split_video_chunks", lambda source_video, output_dir, max_duration_sec: [])
     monkeypatch.setattr(

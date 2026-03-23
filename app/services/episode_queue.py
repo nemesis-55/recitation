@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from app.config import settings
-from app.models.schemas import EpisodeRangeGenerateRequest, EpisodeRangeGenerateResponse, GenerateRequest
+from app.models.schemas import EpisodeGenerateSpec, EpisodeRangeGenerateRequest, EpisodeRangeGenerateResponse, GenerateRequest
 from app.routes.generate import generate_video
 from app.services.manga_catalog import list_episodes
 from app.utils.errors import PipelineError
@@ -27,19 +27,38 @@ def _select_episode_range(episodes: list[dict], ep_from: int | None, ep_to: int 
     return [e for e in items if start <= int(e.get("episode_no") or 0) <= end]
 
 
-def _select_episodes(episodes: list[dict], payload: EpisodeRangeGenerateRequest) -> tuple[list[dict], str]:
+def _select_episodes(
+    episodes: list[dict], payload: EpisodeRangeGenerateRequest
+) -> tuple[list[dict], str, dict[int, EpisodeGenerateSpec]]:
+    """Returns selected episode dicts, mode label, and optional per-episode panel specs."""
+    spec_map: dict[int, EpisodeGenerateSpec] = {}
     items = sorted(episodes, key=lambda e: int(e.get("episode_no") or 0))
+    if payload.episode_specs:
+        for s in payload.episode_specs:
+            spec_map[int(s.episode_no)] = s
+        wanted_set = set(spec_map.keys())
+        selected = [e for e in items if int(e.get("episode_no") or 0) in wanted_set]
+        order = [int(s.episode_no) for s in payload.episode_specs]
+        selected.sort(key=lambda e: order.index(int(e.get("episode_no") or 0)))
+        return selected, "specs", spec_map
     if payload.select_all_episodes:
-        return items, "all"
+        return items, "all", spec_map
     chosen = [int(x) for x in (payload.episode_numbers or []) if int(x) >= 0]
     if chosen:
         wanted = set(chosen)
-        return [e for e in items if int(e.get("episode_no") or 0) in wanted], "explicit_list"
-    return _select_episode_range(items, payload.episode_from, payload.episode_to), "range"
+        return [e for e in items if int(e.get("episode_no") or 0) in wanted], "explicit_list", spec_map
+    return _select_episode_range(items, payload.episode_from, payload.episode_to), "range", spec_map
 
 
-def _has_panel_filters(payload: EpisodeRangeGenerateRequest) -> bool:
+def _has_global_panel_filters(payload: EpisodeRangeGenerateRequest) -> bool:
+    """Legacy flat page/panel filters on the request (not episode_specs)."""
     return any(v is not None for v in (payload.page_from, payload.page_to, payload.panel_from, payload.panel_to))
+
+
+def _episode_panel_active(spec: EpisodeGenerateSpec | None, payload: EpisodeRangeGenerateRequest) -> bool:
+    if spec is not None:
+        return any(v is not None for v in (spec.panel_from, spec.panel_to))
+    return _has_global_panel_filters(payload)
 
 
 def _run_root_from_report_path(report_path: str | None) -> Path | None:
@@ -211,7 +230,7 @@ def _generate_episode_with_auto_chunk(payload: EpisodeRangeGenerateRequest, view
 
 def run_episode_range_sequential(payload: EpisodeRangeGenerateRequest) -> EpisodeRangeGenerateResponse:
     episodes = list_episodes(payload.title_slug)
-    selected, mode = _select_episodes(episodes, payload)
+    selected, mode, spec_map = _select_episodes(episodes, payload)
     logger.info(
         "episode_queue enqueue title_slug=%s mode=%s requested_from=%s requested_to=%s selected=%s",
         payload.title_slug,
@@ -235,7 +254,8 @@ def run_episode_range_sequential(payload: EpisodeRangeGenerateRequest) -> Episod
                 }
             ],
         )
-    if _has_panel_filters(payload) and len(selected) != 1:
+    # Legacy: global page/panel filters apply to all episodes — only allowed for a single episode.
+    if not spec_map and _has_global_panel_filters(payload) and len(selected) != 1:
         return EpisodeRangeGenerateResponse(
             status="failed",
             title_slug=payload.title_slug,
@@ -256,6 +276,12 @@ def run_episode_range_sequential(payload: EpisodeRangeGenerateRequest) -> Episod
     for idx, episode in enumerate(selected, start=1):
         viewer_url = str(episode.get("viewer_url") or "").strip()
         ep_no = int(episode.get("episode_no") or 0)
+        spec = spec_map.get(ep_no) if spec_map else None
+        panel_from = spec.panel_from if spec is not None else payload.panel_from
+        panel_to = spec.panel_to if spec is not None else payload.panel_to
+        page_from = payload.page_from
+        page_to = payload.page_to
+        ep_has_panel = _episode_panel_active(spec, payload)
         logger.info(
             "episode_queue start title_slug=%s episode_no=%s progress=%s/%s",
             payload.title_slug,
@@ -263,15 +289,15 @@ def run_episode_range_sequential(payload: EpisodeRangeGenerateRequest) -> Episod
             idx,
             len(selected),
         )
-        if settings.auto_chunk_enabled and not _has_panel_filters(payload):
+        if settings.auto_chunk_enabled and not ep_has_panel:
             result = _generate_episode_with_auto_chunk(payload, viewer_url, ep_no, episode.get("episode_slug"))
         else:
             req = GenerateRequest(
                 pdf_path=viewer_url,
-                page_from=payload.page_from,
-                page_to=payload.page_to,
-                panel_from=payload.panel_from,
-                panel_to=payload.panel_to,
+                page_from=page_from,
+                page_to=page_to,
+                panel_from=panel_from,
+                panel_to=panel_to,
             )
             response = generate_video(req)
             result = {

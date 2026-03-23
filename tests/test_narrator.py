@@ -4,6 +4,8 @@ from app.services.audio.character_engine import get_character_profile, get_voice
 from app.services.audio.dialogue_analyzer import estimate_emotion_intensity
 from app.services.audio.pause_engine import pause_seconds
 from app.services.audio.speech_renderer import render_speech
+from app.services.audio.audio_rule_engine import resolve_audio_plan
+from app.services.audio.tts_elevenlabs import voice_settings_for_emotion
 
 
 def test_select_elevenlabs_voice_uses_gender_defaults():
@@ -60,8 +62,47 @@ def test_character_profile_contains_voice_direction_keys():
     assert set(profile.keys()) == {"stability", "similarity_boost", "style", "speed"}
 
 
+def test_resolve_audio_plan_same_gender_unified_tempo(monkeypatch):
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_speed_male", 0.98)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_speed_female", 0.97)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_emotion_speed_mix", 0.38)
+    m1 = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="male_1")
+    m7 = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="male_7")
+    assert m1["voice_settings"]["speed"] == m7["voice_settings"]["speed"]
+    f1 = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="female_1")
+    f3 = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="female_3")
+    assert f1["voice_settings"]["speed"] == f3["voice_settings"]["speed"]
+
+
+def test_resolve_audio_plan_gender_bases_differ(monkeypatch):
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_speed_male", 1.0)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_speed_female", 0.92)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_emotion_speed_mix", 0.38)
+    m = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="male_1")
+    f = resolve_audio_plan("x", "neutral", 0.5, "neutral", speaker="female_1")
+    assert m["voice_settings"]["speed"] > f["voice_settings"]["speed"]
+
+
 def test_render_performance_text_adds_punctuation():
     assert render_speech("hello world", "neutral", 0.4).endswith(".")
+
+
+def test_indian_english_accent_tweaks_voice_settings(monkeypatch):
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_accent", "indian_english")
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_humanize", True)
+    out = voice_settings_for_emotion("neutral", 0.5, profile=None)
+    assert 0.2 <= out["stability"] <= 0.75
+    assert 0.55 <= out["similarity_boost"] <= 0.9
+    assert "speed" in out and 0.7 <= float(out["speed"]) <= 1.2
+
+
+def test_humanize_reduces_monotone_stability(monkeypatch):
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_humanize", True)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_accent", "default")
+    on = voice_settings_for_emotion("neutral", 0.5, profile=None)
+    monkeypatch.setattr(app_settings, "elevenlabs_tts_humanize", False)
+    off = voice_settings_for_emotion("neutral", 0.5, profile=None)
+    assert on["stability"] < off["stability"]
 
 
 def test_render_performance_text_drops_short_sfx_noise():

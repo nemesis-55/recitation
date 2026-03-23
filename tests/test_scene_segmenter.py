@@ -56,3 +56,25 @@ def test_segment_chunk_converts_local_ranges_to_global(monkeypatch):
     out = ss._segment_chunk(lines, chunk_start=100, expected_total=320)
     assert out[0]["panel_range"] == [101, 105]
     assert out[1]["panel_range"] == [106, 110]
+
+
+def test_scene_segmenter_uses_cache_without_openai(monkeypatch):
+    monkeypatch.setattr(app_settings, "openai_dialogue_analysis_enabled", True)
+    monkeypatch.setattr(app_settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(
+        ss,
+        "read_cache_json",
+        lambda _ns, _key: [{"scene_id": 1, "panel_range": [1, 3], "description": "cached"}],
+    )
+
+    class _NeverClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("OpenAI should not be called on cache hit")
+
+    monkeypatch.setattr(ss, "OpenAI", _NeverClient)
+    lines = [
+        SrtTimelineLine(index=i + 1, start_sec=float(i), end_sec=float(i) + 0.8, text=f"line {i+1}", speaker="male_1", emotion="neutral")
+        for i in range(3)
+    ]
+    out = segment_scenes(lines)
+    assert out == [{"scene_id": 1, "panel_range": [1, 3], "description": "cached"}]

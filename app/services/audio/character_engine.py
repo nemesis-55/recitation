@@ -7,18 +7,19 @@ from app.config import settings
 from app.models.schemas import ScriptLine
 
 _DEFAULT_CHARACTER_PROFILES: dict[str, dict[str, float | str]] = {
-    "male_1": {"stability": 0.34, "similarity_boost": 0.8, "style": 0.45, "speed": 1.04},
-    "male_2": {"stability": 0.4, "similarity_boost": 0.8, "style": 0.35, "speed": 1.0},
-    "male_3": {"stability": 0.32, "similarity_boost": 0.78, "style": 0.5, "speed": 1.06},
-    "male_4": {"stability": 0.45, "similarity_boost": 0.82, "style": 0.28, "speed": 0.98},
-    "male_5": {"stability": 0.38, "similarity_boost": 0.79, "style": 0.42, "speed": 1.02},
-    "male_6": {"stability": 0.36, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
-    "male_7": {"stability": 0.42, "similarity_boost": 0.82, "style": 0.32, "speed": 0.96},
-    "female_1": {"stability": 0.43, "similarity_boost": 0.82, "style": 0.34, "speed": 0.97},
-    "female_2": {"stability": 0.37, "similarity_boost": 0.8, "style": 0.46, "speed": 1.0},
-    "female_3": {"stability": 0.48, "similarity_boost": 0.84, "style": 0.26, "speed": 0.94},
-    "narrator": {"stability": 0.52, "similarity_boost": 0.84, "style": 0.22, "speed": 0.98},
-    "unknown_1": {"stability": 0.42, "similarity_boost": 0.78, "style": 0.3, "speed": 1.0},
+    # speed: use gender-unified base (see gender_base_tts_speed); per-slot differences only for timbre direction.
+    "male_1": {"stability": 0.34, "similarity_boost": 0.8, "style": 0.52},
+    "male_2": {"stability": 0.4, "similarity_boost": 0.8, "style": 0.42},
+    "male_3": {"stability": 0.32, "similarity_boost": 0.78, "style": 0.56},
+    "male_4": {"stability": 0.45, "similarity_boost": 0.82, "style": 0.36},
+    "male_5": {"stability": 0.38, "similarity_boost": 0.79, "style": 0.48},
+    "male_6": {"stability": 0.36, "similarity_boost": 0.8, "style": 0.44},
+    "male_7": {"stability": 0.42, "similarity_boost": 0.82, "style": 0.4},
+    "female_1": {"stability": 0.43, "similarity_boost": 0.82, "style": 0.44},
+    "female_2": {"stability": 0.37, "similarity_boost": 0.8, "style": 0.54},
+    "female_3": {"stability": 0.48, "similarity_boost": 0.84, "style": 0.38},
+    "narrator": {"stability": 0.52, "similarity_boost": 0.84, "style": 0.32},
+    "unknown_1": {"stability": 0.42, "similarity_boost": 0.78, "style": 0.4},
 }
 
 
@@ -68,6 +69,19 @@ def _infer_gender_from_speaker(speaker: str) -> str:
     if sp.startswith("female_") or sp == "female":
         return "female"
     return "unknown"
+
+
+def gender_base_tts_speed(speaker: str | None) -> float:
+    """Shared tempo per gender so male_* / female_* lines don't drift by character slot."""
+    sp = (speaker or "").strip().lower()
+    if sp == "narrator":
+        return max(0.7, min(1.2, float(getattr(settings, "elevenlabs_tts_speed_narrator", 0.96))))
+    g = _infer_gender_from_speaker(sp)
+    if g == "male":
+        return max(0.7, min(1.2, float(getattr(settings, "elevenlabs_tts_speed_male", 0.98))))
+    if g == "female":
+        return max(0.7, min(1.2, float(getattr(settings, "elevenlabs_tts_speed_female", 0.98))))
+    return max(0.7, min(1.2, float(getattr(settings, "elevenlabs_tts_speed_unknown", 0.97))))
 
 
 def _speaker_slot(speaker: str, prefix: str, max_slot: int) -> int | None:
@@ -137,11 +151,17 @@ def get_character_profile(line: ScriptLine, line_index: int) -> dict[str, float]
     profile = profiles.get(key, _DEFAULT_CHARACTER_PROFILES["unknown_1"])
     # Tiny deterministic variation by line index to avoid robotic flatness.
     wiggle = ((line_index % 5) - 2) * 0.01
+    base_speed = gender_base_tts_speed(speaker)
+    if "speed" in profile:
+        try:
+            base_speed = max(0.85, min(1.15, float(profile["speed"])))
+        except Exception:
+            pass
     return {
         "stability": max(0.2, min(0.8, float(profile.get("stability", 0.42)) + wiggle)),
         "similarity_boost": max(0.55, min(0.9, float(profile.get("similarity_boost", 0.78)))),
         "style": max(0.0, min(0.9, float(profile.get("style", 0.3)))),
-        "speed": max(0.85, min(1.15, float(profile.get("speed", 1.0)))),
+        "speed": base_speed,
     }
 
 

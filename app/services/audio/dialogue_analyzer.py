@@ -11,7 +11,9 @@ from openai import OpenAI
 from app.config import settings
 from app.models.schemas import SrtTimelineLine
 from app.models.schemas import ScriptLine
+from app.utils.cache_utils import hash_text, read_cache_json, write_cache_json
 from app.utils.errors import ProviderError
+from app.services.audio.emotion_constants import ALLOWED_EMOTIONS, emotion_prompt_list
 
 logger = logging.getLogger(__name__)
 _VALID_SPEAKERS = {
@@ -28,27 +30,44 @@ _VALID_SPEAKERS = {
     "narrator",
     "unknown_1",
 }
-_VALID_EMOTIONS = {"angry", "sad", "fear", "happy", "neutral", "surprised", "curious", "confused"}
+_VALID_EMOTIONS = ALLOWED_EMOTIONS
 
 
 def estimate_emotion_intensity(text: str, emotion: str) -> float:
     base = {
-        "angry": 0.75,
-        "sad": 0.55,
-        "fear": 0.7,
-        "happy": 0.65,
-        "neutral": 0.4,
-        "surprised": 0.72,
-        "curious": 0.52,
-        "confused": 0.58,
-    }.get(emotion, 0.5)
+        "angry": 0.8,
+        "sad": 0.6,
+        "fear": 0.76,
+        "happy": 0.7,
+        "neutral": 0.38,
+        "surprised": 0.78,
+        "curious": 0.56,
+        "confused": 0.62,
+        "determined": 0.72,
+        "hopeful": 0.66,
+        "resigned": 0.48,
+        "pain": 0.78,
+        "concerned": 0.6,
+        "worried": 0.66,
+        "weak": 0.4,
+        "urgent": 0.82,
+        "nostalgic": 0.52,
+        "reassuring": 0.56,
+        "regretful": 0.54,
+        "apologetic": 0.5,
+        "serious": 0.64,
+        "desperate": 0.8,
+        "frustrated": 0.74,
+        "teasing": 0.58,
+        "defensive": 0.62,
+    }.get(emotion, 0.52)
     bonus = 0.0
     if "!" in text:
-        bonus += 0.08
+        bonus += 0.1
     if "..." in text:
-        bonus += 0.06
+        bonus += 0.07
     if text.isupper() and len(text) >= 6:
-        bonus += 0.08
+        bonus += 0.09
     return max(0.0, min(1.0, base + bonus))
 
 
@@ -236,7 +255,6 @@ def analyze_srt_timeline(lines: list[SrtTimelineLine]) -> list[SrtTimelineLine]:
         return lines
 
     model = (settings.openai_dialogue_analysis_model or settings.openai_model).strip()
-    client = OpenAI(api_key=settings.openai_api_key, max_retries=0)
     batch_size = max(1, int(settings.openai_dialogue_batch_size))
     base_interval = max(
         0.0,
@@ -246,6 +264,48 @@ def analyze_srt_timeline(lines: list[SrtTimelineLine]) -> list[SrtTimelineLine]:
     rate_limit_pressure = 1.0
     last_openai_request_at = 0.0
     rows: list[dict] = []
+    cache_key = hash_text(
+        json.dumps(
+            {
+                "emotion_schema": "v5",
+                "model": model,
+                "batch_size": batch_size,
+                "lines": [
+                    {
+                        "index": int(ln.index),
+                        "start_sec": round(float(ln.start_sec), 3),
+                        "end_sec": round(float(ln.end_sec), 3),
+                        "text": str(ln.text or ""),
+                    }
+                    for ln in lines
+                ],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    )
+    cached_rows = read_cache_json("dialogue_analyzer", cache_key)
+    if isinstance(cached_rows, list) and len(cached_rows) == len(lines):
+        rows = [r for r in cached_rows if isinstance(r, dict)]
+        if len(rows) == len(lines):
+            for i, row in enumerate(rows):
+                sp = str(row.get("speaker", "unknown_1")).strip().lower()
+                if sp not in _VALID_SPEAKERS:
+                    sp = "unknown_1"
+                emo = str(row.get("emotion", "neutral")).strip().lower()
+                if emo not in _VALID_EMOTIONS:
+                    emo = "neutral"
+                try:
+                    inten = float(row.get("intensity", estimate_emotion_intensity(lines[i].text, emo)))
+                except Exception:
+                    inten = estimate_emotion_intensity(lines[i].text, emo)
+                inten = max(0.0, min(1.0, inten))
+                lines[i].speaker = sp
+                lines[i].emotion = emo
+                lines[i].intensity = inten
+            logger.info("dialogue_analyzer cache_hit lines=%s", len(lines))
+            return lines
+    client = OpenAI(api_key=settings.openai_api_key, max_retries=0)
     logger.info(
         "dialogue_analyzer start total_lines=%s batch_size=%s base_interval_sec=%.2f",
         len(lines),
@@ -258,19 +318,18 @@ def analyze_srt_timeline(lines: list[SrtTimelineLine]) -> list[SrtTimelineLine]:
         context_lines = [f"{ln.index}. {ln.text}" for ln in context]
         prompt_lines = [f"{ln.index}. {ln.text}" for ln in chunk]
         prompt = (
-            "Analyze subtitle lines for voice direction.\n"
-            "Return ONLY raw JSON object with key \"analysis\" as an array.\n"
-            f"Return exactly {len(chunk)} items in the same order as input lines.\n"
-            "Allowed speaker labels: male_1..male_7, female_1..female_3, narrator, unknown_1.\n"
-            "Allowed emotion labels: angry, sad, fear, happy, neutral, surprised, curious, confused.\n"
-            "intensity must be float in [0,1].\n"
-            "Rules:\n"
-            "- Use gendered speaker ids whenever possible (male_* or female_*).\n"
-            "- If multiple speakers share same gender, use distinct slots (male_1..male_7 / female_1..female_3).\n"
-            "- For alternating dialogue turns, avoid collapsing turns to one speaker id.\n"
-            "- Use narrator only for scene description/non-dialogue exposition.\n"
-            "- Be deterministic.\n"
-            "Output example:\n"
+            "You are an advanced cinematic manga narrator and dialogue director.\n"
+            "Analyze subtitle lines for voice direction and return JSON only.\n"
+            "Lines may include OCR from social-media framed panels (usernames, UI, hashtags); "
+            "infer speaker and emotion from in-story speech and caption intent, not platform chrome.\n"
+            "Schema: {\"analysis\":[{\"speaker\":\"...\",\"emotion\":\"...\",\"intensity\":0.0}]}\n"
+            f"Return exactly {len(chunk)} analysis rows in input order.\n"
+            "speaker: male_1..male_7, female_1..female_3, narrator, unknown_1.\n"
+            f"emotion: {emotion_prompt_list()}.\n"
+            "intensity: float in [0,1] — use the full range; avoid clustering near 0.45–0.55 unless the line is truly flat.\n"
+            "Push intensity up for clear affect (fear, anger, joy, shock); theatrical, readable delivery.\n"
+            "Do not rewrite, merge, or skip any target line; classify each one exactly once.\n"
+            "Use gendered speaker IDs when possible; narrator only for non-dialogue narration.\n"
             "{\"analysis\":[{\"speaker\":\"male_1\",\"emotion\":\"neutral\",\"intensity\":0.42}]}\n"
             + ("Previous lines (context only):\n" + "\n".join(context_lines) + "\n" if context_lines else "")
             + "Target lines:\n"
@@ -328,6 +387,8 @@ def analyze_srt_timeline(lines: list[SrtTimelineLine]) -> list[SrtTimelineLine]:
             min(len(lines), start + len(chunk)),
             len(lines),
         )
+
+    write_cache_json("dialogue_analyzer", cache_key, rows)
 
     for i, row in enumerate(rows):
         sp = str(row.get("speaker", "unknown_1")).strip().lower()

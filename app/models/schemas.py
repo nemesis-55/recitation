@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GenerateRequest(BaseModel):
@@ -82,6 +82,8 @@ class TimelineEntry(BaseModel):
     start_sec: float
     end_sec: float
     duration_sec: float
+    # YouTube panel motion preset for this clip (e.g. center_zoom_out, ken_burns); set by timeline_builder rotation.
+    youtube_motion: Optional[str] = None
 
 
 class SubtitleEntry(BaseModel):
@@ -117,6 +119,15 @@ class MangaSearchResponse(BaseModel):
     stats: dict[str, Any] = Field(default_factory=dict)
 
 
+class EpisodeGenerateSpec(BaseModel):
+    """One episode to generate, with optional panel subset (no page range)."""
+
+    model_config = ConfigDict(extra="forbid")
+    episode_no: int = Field(..., ge=0)
+    panel_from: Optional[int] = Field(default=None, ge=0)
+    panel_to: Optional[int] = Field(default=None, ge=0)
+
+
 class EpisodeRangeGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title_slug: str
@@ -124,10 +135,21 @@ class EpisodeRangeGenerateRequest(BaseModel):
     episode_to: Optional[int] = Field(default=None, ge=0)
     episode_numbers: Optional[list[int]] = None
     select_all_episodes: bool = False
+    """Preferred: explicit list with optional per-episode panel ranges (replaces range/checkbox modes)."""
+    episode_specs: Optional[list[EpisodeGenerateSpec]] = None
     page_from: Optional[int] = Field(default=None, ge=0)
     page_to: Optional[int] = Field(default=None, ge=0)
     panel_from: Optional[int] = Field(default=None, ge=0)
     panel_to: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _unique_episode_specs(self) -> EpisodeRangeGenerateRequest:
+        if not self.episode_specs:
+            return self
+        nos = [s.episode_no for s in self.episode_specs]
+        if len(nos) != len(set(nos)):
+            raise ValueError("episode_specs: duplicate episode_no")
+        return self
 
 
 class EpisodeRangeGenerateResponse(BaseModel):

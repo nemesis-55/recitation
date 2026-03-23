@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import email
 import json
+import shutil
 import time
 from collections import Counter
 from pathlib import Path
@@ -16,6 +17,8 @@ from app.models.schemas import ScriptLine
 from app.services.audio.pause_engine import pause_seconds
 from app.utils.cache_utils import hash_text, read_cache_bytes, write_cache_bytes
 from app.utils.errors import ProviderError
+
+from app.services.audio.bgm_library import materialize_bed_for_scene, pick_bgm_slot
 
 
 def _dominant_emotion(lines: list[ScriptLine]) -> str:
@@ -34,7 +37,24 @@ _EMOTION_LABELS: dict[str, str] = {
     "surprised": "Tense rising strings with sharp accents, cinematic suspense, no vocals, loopable",
     "curious": "Light investigative pulses with soft pads, cinematic mystery underscore, no vocals, loopable",
     "confused": "Uncertain ambient textures with subtle dissonance, cinematic unease, no vocals, loopable",
+    "determined": "Steady motivational low strings and subtle pulses, forward cinematic drive, no vocals, loopable",
+    "hopeful": "Warm rising strings with gentle piano, resilient cinematic optimism, no vocals, loopable",
+    "resigned": "Soft low piano and sparse strings, subdued acceptance, no vocals, loopable",
+    "pain": "Tight dissonant strings with low pulses, cinematic distress, no vocals, loopable",
+    "concerned": "Subtle tense pads and restrained strings, cautious cinematic mood, no vocals, loopable",
+    "worried": "Uneasy light pulses with thin strings, anxious cinematic underscore, no vocals, loopable",
+    "weak": "Fragile piano motifs with airy pads, faint cinematic tone, no vocals, loopable",
+    "urgent": "Driving low pulses and urgent strings, high cinematic tension, no vocals, loopable",
+    "nostalgic": "Warm nostalgic piano with soft distant strings, reflective cinematic mood, no vocals, loopable",
+    "reassuring": "Gentle uplifting pads with soft piano, calm cinematic comfort, no vocals, loopable",
+    "regretful": "Melancholic piano with muted strings, reflective regret, no vocals, loopable",
+    "apologetic": "Soft intimate pads with restrained piano, subdued cinematic tone, no vocals, loopable",
+    "serious": "Low sustained strings with minimal percussion, grave cinematic tone, no vocals, loopable",
+    "desperate": "Frantic strings with pulsing low brass and urgent swells, cinematic desperation, no vocals, loopable",
     "neutral": "Soft neo-classical ambient underscore with airy pads and light strings, no vocals, loopable",
+    "frustrated": "Edgy low strings with tight rhythmic pulses, restrained irritation, cinematic tension, no vocals, loopable",
+    "teasing": "Playful light pizzicato and soft cheeky plucks, mischievous undertone, no vocals, loopable",
+    "defensive": "Guarded low pads with cautious strings, wary protective mood, no vocals, loopable",
 }
 
 _MUSIC_TYPE_TO_EMOTION: dict[str, str] = {
@@ -61,23 +81,60 @@ def estimate_script_narration_duration_sec(lines: list[ScriptLine]) -> float:
 
 
 def resolve_music_bed(
-    lines: list[ScriptLine], audio_dir: Path, music_type_override: str | None = None
+    lines: list[ScriptLine],
+    audio_dir: Path,
+    music_type_override: str | None = None,
+    scene_id: int | None = None,
 ) -> tuple[Path | None, str, str]:
     """
-    Returns (path_or_none, source, reason) where source is elevenlabs or none.
+    Returns (path_or_none, source, reason).
+
+    Resolution order:
+    1) When local library is preferred OR ElevenLabs music is off: materialize from the persisted
+       library (``outputs/cache/bgm_library``). Slot choice maps **dominant emotion** to one of 10
+       mood families (aligned with library prompts); larger ``BGM_LIBRARY_COUNT`` adds variant
+       takes (same mood, ``slot+10``), not random unrelated beds.
+    2) When ElevenLabs music is on and library is not preferred: generate per-scene bed (cached).
+    3) Fallback: single ``BGM_DEFAULT_PATH`` copy.
     """
     if not settings.audio_bed_in_narration:
         return None, "none", "audio_bed_in_narration_disabled"
-    if not settings.elevenlabs_music_enabled:
-        return None, "none", "elevenlabs_music_disabled"
 
     override = (music_type_override or "").strip().lower()
     emotion = _MUSIC_TYPE_TO_EMOTION.get(override) or _dominant_emotion(lines)
-    duration_ms = int(max(3000, min(600000, estimate_script_narration_duration_sec(lines) * 1000)))
-    prompt = music_prompt_for_emotion(emotion)
-    out = audio_dir / "music_scene.mp3"
-    generate_scene_music(prompt=prompt, duration_ms=duration_ms, output_path=out)
-    return out, "elevenlabs", ""
+    slot = pick_bgm_slot(emotion, scene_id, len(lines))
+
+    use_library_first = bool(settings.bgm_library_prefer_local) or not bool(settings.elevenlabs_music_enabled)
+
+    if use_library_first:
+        lib_out = materialize_bed_for_scene(slot, audio_dir)
+        if lib_out is not None and lib_out.exists():
+            return lib_out, "bgm_library", f"slot_{slot:02d}"
+
+    if settings.elevenlabs_music_enabled:
+        duration_ms = int(max(3000, min(600000, estimate_script_narration_duration_sec(lines) * 1000)))
+        prompt = music_prompt_for_emotion(emotion)
+        out = audio_dir / "music_scene.mp3"
+        try:
+            generate_scene_music(prompt=prompt, duration_ms=duration_ms, output_path=out)
+            return out, "elevenlabs", ""
+        except ProviderError:
+            lib_out = materialize_bed_for_scene(slot, audio_dir)
+            if lib_out is not None and lib_out.exists():
+                return lib_out, "bgm_library", "elevenlabs_failed_fallback"
+            raise
+
+    # ElevenLabs off and library path failed — try single default file
+    default = settings.bgm_default_path
+    if default:
+        p = Path(str(default)).expanduser()
+        if p.is_file():
+            out = audio_dir / "music_scene.mp3"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, out)
+            return out, "bgm_default", "library_unavailable_used_default"
+
+    return None, "none", "no_music_source"
 
 
 def music_prompt_for_emotion(emotion: str) -> str:

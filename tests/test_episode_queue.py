@@ -1,4 +1,4 @@
-from app.models.schemas import EpisodeRangeGenerateRequest, GenerateResponse
+from app.models.schemas import EpisodeGenerateSpec, EpisodeRangeGenerateRequest, GenerateResponse
 from app.services.episode_queue import run_episode_range_sequential
 
 
@@ -20,6 +20,32 @@ def test_episode_queue_selects_explicit_episode_numbers(monkeypatch):
     assert out.status == "completed"
     assert out.submitted == 2
     assert [r["episode_no"] for r in out.results] == [1, 3]
+
+
+def test_episode_queue_episode_specs_runs_in_order(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.episode_queue.list_episodes",
+        lambda _slug: [
+            {"episode_no": 1, "episode_slug": "ep-1", "viewer_url": "u1"},
+            {"episode_no": 2, "episode_slug": "ep-2", "viewer_url": "u2"},
+            {"episode_no": 3, "episode_slug": "ep-3", "viewer_url": "u3"},
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.episode_queue.generate_video",
+        lambda _req: GenerateResponse(status="completed", video_path="/tmp/v.mp4"),
+    )
+    payload = EpisodeRangeGenerateRequest(
+        title_slug="x",
+        episode_specs=[
+            EpisodeGenerateSpec(episode_no=3),
+            EpisodeGenerateSpec(episode_no=1),
+        ],
+    )
+    out = run_episode_range_sequential(payload)
+    assert out.status == "completed"
+    assert out.submitted == 2
+    assert [r["episode_no"] for r in out.results] == [3, 1]
 
 
 def test_episode_queue_rejects_panel_filters_for_multi_episode(monkeypatch):

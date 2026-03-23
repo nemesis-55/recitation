@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from collections import Counter
@@ -19,24 +17,113 @@ from app.services.audio.scene_analyzer import analyze_scene
 from app.services.audio.music_engine import resolve_music_bed  # compatibility for tests/older patch points
 from app.services.audio.tts_elevenlabs import generate_tts  # compatibility for tests/older patch points
 from app.utils.ffmpeg_runner import probe_duration_seconds, run_ffmpeg  # probe kept for test patch points
+from app.utils.pipeline_debug import log_pipeline_debug
 from app.config import settings
+from app.services.audio.emotion_constants import ALLOWED_EMOTIONS
 
 logger = logging.getLogger(__name__)
-_DEBUG_LOG_PATH = Path("/Users/nemesis/Desktop/project/manga_recitation/.cursor/debug-4a522c.log")
 
 
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    payload = {
-        "sessionId": "4a522c",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+def _effective_crossfade_sec(scene_paths: list[str], requested: float) -> float:
+    """Cap crossfade so each scene file is long enough for FFmpeg acrossfade."""
+    if requested <= 0 or len(scene_paths) < 2:
+        return 0.0
+    req = min(0.5, max(0.0, float(requested)))
+    durs: list[float] = []
+    for p in scene_paths:
+        try:
+            durs.append(float(probe_duration_seconds(Path(p))))
+        except Exception:
+            durs.append(2.0)
+    cap = min(durs) * 0.35
+    return max(0.0, min(req, cap))
+
+
+def _concat_scene_narration_files(
+    scene_audio_files: list[str],
+    narration_path: Path,
+    crossfade_requested: float,
+) -> float:
+    """
+    Merge per-scene narration MP3s. Returns effective crossfade duration in seconds (for timeline offsets).
+    """
+    paths = [str(Path(p).resolve()) for p in scene_audio_files]
+    if len(paths) == 1:
+        narration_path.parent.mkdir(parents=True, exist_ok=True)
+        narration_path.write_bytes(Path(paths[0]).read_bytes())
+        return 0.0
+    d_eff = _effective_crossfade_sec(paths, crossfade_requested)
+    narration_path.parent.mkdir(parents=True, exist_ok=True)
+    concat_file = narration_path.parent / "scenes_concat.txt"
+    concat_file.write_text("\n".join([f"file '{p}'" for p in paths]), encoding="utf-8")
+    if d_eff <= 1e-9:
+        run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                str(narration_path),
+            ],
+            stage="audio_pipeline",
+        )
+        return 0.0
+    cmd = ["ffmpeg", "-y"]
+    for p in paths:
+        cmd.extend(["-i", p])
+    fc_parts: list[str] = []
+    prev = "[0:a]"
+    for i in range(1, len(paths)):
+        nxt = f"[{i}:a]"
+        out = f"xf{i}" if i < len(paths) - 1 else "aout"
+        fc_parts.append(f"{prev}{nxt}acrossfade=d={d_eff:.4f}:c1=tri:c2=tri[{out}]")
+        prev = f"[{out}]"
+    filter_complex = ";".join(fc_parts)
+    cmd.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[aout]",
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "2",
+            str(narration_path),
+        ]
+    )
+    try:
+        run_ffmpeg(cmd, stage="audio_pipeline")
+        return d_eff
+    except Exception as exc:
+        logger.warning("scene audio crossfade failed (%s); using concat demuxer", exc)
+        run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                str(narration_path),
+            ],
+            stage="audio_pipeline",
+        )
+        return 0.0
 
 
 def _to_script_line(item: SrtTimelineLine, panel_path: str) -> ScriptLine:
@@ -87,9 +174,27 @@ def run_audio_pipeline(
             return "neutral"
         counts = Counter(emotions)
         emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        if emo == "angry":
+        if emo in {"angry", "urgent", "frustrated"}:
             return "fight"
-        if emo in {"sad", "fear", "surprised", "confused"}:
+        if emo in {
+            "sad",
+            "fear",
+            "surprised",
+            "confused",
+            "hopeful",
+            "resigned",
+            "pain",
+            "concerned",
+            "worried",
+            "weak",
+            "nostalgic",
+            "reassuring",
+            "regretful",
+            "apologetic",
+            "serious",
+            "desperate",
+            "defensive",
+        }:
             return "emotional"
         return "neutral"
 
@@ -99,7 +204,7 @@ def run_audio_pipeline(
             return "neutral"
         counts = Counter(emotions)
         emo = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        return emo if emo in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"} else "neutral"
+        return emo if emo in ALLOWED_EMOTIONS else "neutral"
 
     def _scene_input(scene: dict) -> tuple[dict, list[SrtTimelineLine], list[str], Path, float, EpisodeState, object, object, object, object]:
         lo, hi = int(scene["panel_range"][0]), int(scene["panel_range"][1])
@@ -112,7 +217,7 @@ def run_audio_pipeline(
         if scene_type not in {"fight", "emotional", "neutral"}:
             scene_type = _derive_scene_type(chunk)
         scene_emotion = str(scene.get("scene_emotion", "")).strip().lower()
-        if scene_emotion not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
+        if scene_emotion not in ALLOWED_EMOTIONS:
             scene_emotion = _derive_scene_emotion(chunk)
         scene["scene_type"] = scene_type
         scene["scene_emotion"] = scene_emotion
@@ -132,10 +237,9 @@ def run_audio_pipeline(
             scene_results = list(pool.map(lambda args: process_scene(*args), scene_inputs))
 
     scene_results.sort(key=lambda x: int(x.get("scene_id", 0)))
-    # region agent log
-    _debug_log(
-        run_id="pre-fix-1",
-        hypothesis_id="H4",
+    log_pipeline_debug(
+        run_id="audio_pipeline",
+        hypothesis_id="scene_results",
         location="audio_pipeline.py:run_audio_pipeline",
         message="Scene results summary",
         data={
@@ -144,37 +248,20 @@ def run_audio_pipeline(
             "scene_declared_durations": [float(sr.get("duration", 0.0)) for sr in scene_results],
         },
     )
-    # endregion
     scene_audio_files = [str(Path(sr["audio"]).resolve()) for sr in scene_results]
     narration_path = audio_dir / "narration.mp3"
-    if len(scene_audio_files) == 1:
-        narration_path.write_bytes(Path(scene_audio_files[0]).read_bytes())
-    else:
-        concat_file = audio_dir / "scenes_concat.txt"
-        concat_file.write_text("\n".join([f"file '{p}'" for p in scene_audio_files]), encoding="utf-8")
-        run_ffmpeg(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_file),
-                "-c:a",
-                "libmp3lame",
-                str(narration_path),
-            ],
-            stage="audio_pipeline",
-        )
+    scene_join_cf = _concat_scene_narration_files(
+        scene_audio_files,
+        narration_path,
+        float(getattr(settings, "audio_scene_crossfade_sec", 0) or 0),
+    )
 
     # Flatten scene timelines into episode timeline using cumulative offsets.
     flattened_timeline: list[dict] = []
     flattened_segments: list[AudioSegmentSchema] = []
     scene_offset = 0.0
     line_cursor = 0
-    for sr in scene_results:
+    for i, sr in enumerate(scene_results):
         for e in sr.get("timeline", []):
             flattened_timeline.append(
                 {
@@ -207,11 +294,23 @@ def run_audio_pipeline(
             except Exception:
                 pass
         scene_offset += scene_duration
+        if i < len(scene_results) - 1 and scene_join_cf > 1e-9:
+            scene_offset -= scene_join_cf
         line_cursor += len(sr.get("segments", []))
 
+    # Subtitles / timeline: what TTS actually spoke (post render_speech + optional bridge).
+    for seg in flattened_segments:
+        li = int(seg.line_index)
+        if 0 <= li < len(lines):
+            rt = (seg.rendered_text or "").strip()
+            lines[li].performance_text = rt if rt else None
+
+    bed_sources = [str(sr.get("music_source") or "") for sr in scene_results]
+    primary_bed = next((s for s in bed_sources if s in ("bgm_library", "elevenlabs", "bgm_default")), None)
     audio_meta = {
-        "narration_music_source": "scene_level",
+        "narration_music_source": primary_bed if primary_bed else "none",
         "narration_music_reason": "scene_processing",
+        "scene_join_crossfade_sec": round(float(scene_join_cf), 4),
         "sfx_source": "enabled" if settings.elevenlabs_sfx_enabled else "disabled",
         "quality": "cinematic",
         "audio_mode": "panel_wise_single_mix" if settings.audio_panel_wise_mode else "scene_chunked",

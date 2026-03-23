@@ -11,7 +11,7 @@ def test_process_scene_uses_refined_emotion_and_rule_music(monkeypatch, tmp_path
 
     monkeypatch.setattr("app.services.audio.scene_processor.analyze_emotion", lambda *_args: ("sad", 0.9))
 
-    def _fake_resolve_audio_plan(_text, emotion, intensity, _scene_type):
+    def _fake_resolve_audio_plan(_text, emotion, intensity, _scene_type, **_kwargs):
         captured["emotion"] = emotion
         captured["intensity"] = intensity
         return {
@@ -63,10 +63,14 @@ def test_process_scene_emits_actual_interline_pause_metadata(monkeypatch, tmp_pa
     monkeypatch.setattr("app.services.audio.scene_processor.analyze_emotion", lambda *_args: ("neutral", 0.3))
     monkeypatch.setattr(
         "app.services.audio.scene_processor.resolve_audio_plan",
-        lambda *_args: {"voice_settings": {}, "speech_mode": "none", "sfx_plan": [], "music_type": "ambient", "pause": 0.4},
+        lambda *_args, **_kwargs: {"voice_settings": {}, "speech_mode": "none", "sfx_plan": [], "music_type": "ambient", "pause": 0.4},
     )
     monkeypatch.setattr(
         "app.services.audio.scene_processor.render_speech",
+        lambda text, *_args, **_kwargs: text,
+    )
+    monkeypatch.setattr(
+        "app.services.audio.scene_processor.render_speech_for_display",
         lambda text, *_args, **_kwargs: text,
     )
 
@@ -109,10 +113,11 @@ def test_process_scene_generates_explicit_ocr_sfx_cues(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("app.services.audio.scene_processor.analyze_emotion", lambda *_args: ("neutral", 0.2))
     monkeypatch.setattr(
         "app.services.audio.scene_processor.resolve_audio_plan",
-        lambda *_args: {"voice_settings": {}, "speech_mode": "none", "sfx_plan": [], "music_type": "ambient", "pause": 0.3},
+        lambda *_args, **_kwargs: {"voice_settings": {}, "speech_mode": "none", "sfx_plan": [], "music_type": "ambient", "pause": 0.3},
     )
     monkeypatch.setattr("app.services.audio.scene_processor.generate_sfx_event", lambda *_args, **_kwargs: Path(_args[2]).write_bytes(b"sfx"))
     monkeypatch.setattr("app.services.audio.scene_processor.render_speech", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("app.services.audio.scene_processor.render_speech_for_display", lambda *_args, **_kwargs: "")
 
     def _fake_mix(events, output_path, _work_dir):
         emitted["events"] = len(events)
@@ -134,3 +139,50 @@ def test_process_scene_generates_explicit_ocr_sfx_cues(monkeypatch, tmp_path: Pa
     assert out["audio"]
     # voice + sfx should both be present in the mixed event timeline
     assert emitted["events"] >= 2
+
+
+def test_process_scene_skips_sfx_when_disabled_even_with_cues(monkeypatch, tmp_path: Path):
+    line = SrtTimelineLine(
+        index=1,
+        start_sec=0.0,
+        end_sec=1.0,
+        text="",
+        speaker="unknown_1",
+        emotion="neutral",
+        intensity=0.2,
+        sfx_cues=["impact"],
+    )
+    emitted = {"events": 0}
+    monkeypatch.setattr("app.services.audio.scene_processor.settings.elevenlabs_sfx_enabled", False)
+    monkeypatch.setattr("app.services.audio.scene_processor.analyze_emotion", lambda *_args: ("neutral", 0.2))
+    monkeypatch.setattr(
+        "app.services.audio.scene_processor.resolve_audio_plan",
+        lambda *_args, **_kwargs: {"voice_settings": {}, "speech_mode": "none", "sfx_plan": ["impact"], "music_type": "ambient", "pause": 0.3},
+    )
+    monkeypatch.setattr("app.services.audio.scene_processor.render_speech", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr("app.services.audio.scene_processor.render_speech_for_display", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        "app.services.audio.scene_processor.generate_sfx_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SFX generation must be skipped")),
+    )
+
+    def _fake_mix(events, output_path, _work_dir):
+        emitted["events"] = len(events)
+        output_path.write_bytes(b"mix")
+        return output_path
+
+    out = process_scene(
+        scene={"scene_id": 1, "scene_type": "neutral", "scene_emotion": "neutral"},
+        scene_lines=[line],
+        scene_panel_paths=[str(tmp_path / "p.png")],
+        scene_audio_dir=tmp_path,
+        scene_start_sec=0.0,
+        episode_state=EpisodeState(),
+        tts_func=lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"tts"),
+        mix_func=_fake_mix,
+        resolve_music_func=lambda *_args, **_kwargs: (None, "none", "disabled"),
+        probe_func=lambda _p: 0.5,
+    )
+    assert out["audio"]
+    # only voice event remains when sfx is disabled
+    assert emitted["events"] == 1

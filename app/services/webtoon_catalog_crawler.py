@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -35,9 +35,23 @@ def _genre_urls() -> list[str]:
         parsed = json.loads(raw)
     except Exception as exc:
         raise ValidationError("catalog_crawler", f"Invalid WEBTOON_CATALOG_GENRE_URLS_JSON: {exc}", "CATALOG_BAD_GENRE_URLS") from exc
-    if not isinstance(parsed, list) or not parsed:
-        raise ValidationError("catalog_crawler", "WEBTOON_CATALOG_GENRE_URLS_JSON must be a non-empty array", "CATALOG_BAD_GENRE_URLS")
-    return [str(x).strip() for x in parsed if str(x).strip()]
+    values: list[str]
+    if isinstance(parsed, list):
+        values = [str(x).strip() for x in parsed if str(x).strip()]
+    elif isinstance(parsed, dict):
+        # Backward compatibility: allow {"genre": "url", ...} format from older env files.
+        values = [str(v).strip() for v in parsed.values() if str(v).strip()]
+    elif isinstance(parsed, str):
+        values = [parsed.strip()] if parsed.strip() else []
+    else:
+        values = []
+    if not values:
+        raise ValidationError(
+            "catalog_crawler",
+            "WEBTOON_CATALOG_GENRE_URLS_JSON must be a non-empty JSON array, object, or URL string",
+            "CATALOG_BAD_GENRE_URLS",
+        )
+    return values
 
 
 def _session() -> requests.Session:
@@ -125,19 +139,84 @@ def _episode_from_url(url: str) -> dict:
     return {"episode_no": ep_no, "episode_slug": slug, "viewer_url": url}
 
 
+def _list_url_for_page(list_url: str, page: int) -> str:
+    """LINE Webtoon episode list uses ``page`` query for additional batches."""
+    if page <= 1:
+        return list_url
+    parsed = urlparse(list_url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    qs["page"] = [str(int(page))]
+    pairs: list[tuple[str, str]] = []
+    for key, vals in qs.items():
+        for v in vals:
+            pairs.append((key, v))
+    new_query = urlencode(pairs)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+
+
+def _collect_episode_urls_paginated(
+    list_url: str,
+    session: requests.Session,
+    timeout: int,
+    headers: dict[str, str],
+    *,
+    max_episodes: int,
+    max_pages: int,
+) -> list[str]:
+    """Fetch list HTML pages until no new viewer links, cap, or max_pages."""
+    seen_urls: set[str] = set()
+    collected: list[str] = []
+    safe_max_ep = max(1, int(max_episodes))
+    safe_max_pages = max(1, int(max_pages))
+    for page in range(1, safe_max_pages + 1):
+        fetch_url = _list_url_for_page(list_url, page)
+        try:
+            resp = session.get(fetch_url, timeout=timeout, headers=headers)
+        except Exception as exc:
+            logger.info("catalog_crawler episode_page_fetch_error page=%s url=%s err=%s", page, fetch_url, exc)
+            break
+        if resp.status_code == 404:
+            break
+        try:
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.info("catalog_crawler episode_page_http_error page=%s status=%s err=%s", page, resp.status_code, exc)
+            break
+        batch = _extract_episode_links(resp.text, list_url)
+        new_count = 0
+        for u in batch:
+            if u in seen_urls:
+                continue
+            seen_urls.add(u)
+            collected.append(u)
+            new_count += 1
+        if page > 1 and new_count == 0:
+            break
+        if len(collected) >= safe_max_ep:
+            break
+    return collected[:safe_max_ep]
+
+
 def _fetch_title_payload(
     list_url: str,
     timeout: int,
     max_episodes: int,
+    max_pages: int,
     headers: dict[str, str],
+    session: requests.Session,
 ) -> dict:
-    title_resp = requests.get(list_url, timeout=timeout, headers=headers)
-    title_resp.raise_for_status()
-    episode_links = _extract_episode_links(title_resp.text, list_url)
-    episode_links = episode_links[: max(1, max_episodes)]
+    episode_urls = _collect_episode_urls_paginated(
+        list_url,
+        session,
+        timeout,
+        headers,
+        max_episodes=max_episodes,
+        max_pages=max_pages,
+    )
     genre, title_slug, title_name = _title_from_list_url(list_url)
     title_no = parse_qs(urlparse(list_url).query).get("title_no", [None])[0]
-    episodes = [_episode_from_url(u) for u in episode_links]
+    episodes = [_episode_from_url(u) for u in episode_urls]
+    episodes.sort(key=lambda e: int(e.get("episode_no") or 0))
     return {
         "genre": genre,
         "title_slug": title_slug,
@@ -156,7 +235,9 @@ def crawl_webtoon_catalog() -> dict:
     genres: dict[str, dict] = {}
     timeout = max(5, int(settings.webtoon_catalog_request_timeout_sec))
     workers = max(1, int(settings.webtoon_catalog_workers))
-    logger.info("catalog_crawler config timeout=%s workers=%s", timeout, workers)
+    max_eps = max(1, int(settings.webtoon_catalog_max_episodes_per_title))
+    max_pages = max(1, int(settings.webtoon_catalog_max_list_pages))
+    logger.info("catalog_crawler config timeout=%s workers=%s max_eps=%s max_pages=%s", timeout, workers, max_eps, max_pages)
     for genre_url in _genre_urls():
         logger.info("catalog_crawler genre_fetch url=%s", genre_url)
         resp = sess.get(genre_url, timeout=timeout)
@@ -171,8 +252,10 @@ def crawl_webtoon_catalog() -> dict:
                     _fetch_title_payload,
                     list_url,
                     timeout,
-                    settings.webtoon_catalog_max_episodes_per_title,
+                    max_eps,
+                    max_pages,
                     headers,
+                    sess,
                 ): list_url
                 for list_url in title_links
             }

@@ -14,10 +14,11 @@ from app.services.panel_extractor import extract_panels
 from app.services.pdf_loader import load_pdf
 from app.services.preflight import run_preflight, validate_page_resolution
 from app.services.quality_checker import check_video
+from app.services.audio.narration_polish import polish_srt_lines
 from app.services.audio.post_ocr_narration import filter_ocr_narration_and_extract_sfx
 from app.services.subtitle_generator import generate_subtitles, load_srt_timeline
 from app.services.timeline_builder import build_timeline
-from app.services.video_editor import assemble_video, split_video_chunks
+from app.services.video_editor import assemble_video, create_reel_derivative, split_video_chunks
 from app.services.webtoon_loader import is_webtoon_url, load_webtoon_panels
 from app.utils.errors import PipelineError
 from app.utils.io_utils import create_run_dirs, derive_run_path_from_source, write_json
@@ -117,6 +118,7 @@ def _assemble_video_compat(**kwargs):
         fallback = dict(kwargs)
         fallback.pop("playback_speed", None)
         fallback.pop("profile", None)
+        fallback.pop("youtube_clips_preformatted", None)
         return assemble_video(**fallback)
 
 
@@ -216,10 +218,19 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
             else:
                 ocr = extract_text_batch(panels)
                 srt_lines = _build_srt_lines_from_ocr(ocr, fallback_duration=max(1.2, settings.min_panel_duration_sec))
-                srt_lines = filter_ocr_narration_and_extract_sfx(srt_lines)
+                srt_lines = filter_ocr_narration_and_extract_sfx(
+                    srt_lines,
+                    emit_sfx_cues=bool(settings.elevenlabs_sfx_enabled),
+                )
+                srt_lines = polish_srt_lines(srt_lines)
                 if len(srt_lines) > len(panels):
                     srt_lines = srt_lines[: len(panels)]
-                report["stages"]["srt_loader"] = {"entries": len(srt_lines), "path": None, "source": "auto_generated_from_ocr"}
+                report["stages"]["srt_loader"] = {
+                    "entries": len(srt_lines),
+                    "path": None,
+                    "source": "auto_generated_from_ocr",
+                    "narration_polish": bool(settings.openai_narration_polish_enabled),
+                }
                 logger.info("srt_loader source=auto_generated_from_ocr entries=%s", len(srt_lines))
             _enforce_stage_timeout("srt_loader", stage_start)
             report["artifacts"] = report.get("artifacts", {})
@@ -269,14 +280,28 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
 
         with StageTimer(logger, "panel_animator"):
             stage_start = time.time()
-            clips = []
+            clips_youtube: list[Path] = []
+            clips_reel: list[Path] = []
             for i, item in enumerate(timeline, start=1):
-                out_clip = dirs["clips"] / f"clip_{i:03d}.mp4"
-                animate_panel(item.panel_path, item.duration_sec, out_clip)
-                item.clip_path = str(out_clip)
-                clips.append(out_clip)
+                out_yt = dirs["clips"] / f"clip_yt_{i:03d}.mp4"
+                out_reel = dirs["clips"] / f"clip_reel_{i:03d}.mp4"
+                animate_panel(
+                    item.panel_path,
+                    item.duration_sec,
+                    out_yt,
+                    profile="youtube",
+                    youtube_motion=item.youtube_motion or "center_zoom_out",
+                )
+                animate_panel(item.panel_path, item.duration_sec, out_reel, profile="reel")
+                item.clip_path = str(out_yt)
+                clips_youtube.append(out_yt)
+                clips_reel.append(out_reel)
             _enforce_stage_timeout("panel_animator", stage_start)
-            report["stages"]["panel_animator"] = {"clips": len(clips)}
+            report["stages"]["panel_animator"] = {
+                "clips": len(clips_youtube),
+                "youtube_profile": "landscape_cinematic",
+                "reel_profile": "full_bleed" if settings.panel_reel_full_bleed else "legacy_pad",
+            }
 
         subtitles_path = None
         use_subtitles = settings.enable_subtitles_default
@@ -293,46 +318,59 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
 
         with StageTimer(logger, "video_editor"):
             stage_start = time.time()
-            final_path = dirs["final"] / "video.mp4"
             youtube_path = dirs["final"] / "video_youtube.mp4"
             reels_dir = dirs["final"] / "reels"
             reel_chunks_dir = reels_dir / "chunks"
             reels_dir.mkdir(parents=True, exist_ok=True)
             reel_chunks_dir.mkdir(parents=True, exist_ok=True)
             video_bgm = settings.bgm_default_path
-            # Avoid doubling the same default BGM (already mixed under narration when source is bgm_default).
-            if (
-                audio_meta.get("narration_music_source") == "bgm_default"
-                and settings.audio_bed_in_narration
-            ):
+            # Avoid doubling BGM already mixed under narration (library, ElevenLabs bed, or default file).
+            nms = str(audio_meta.get("narration_music_source") or "")
+            if nms in ("bgm_default", "bgm_library", "elevenlabs") and settings.audio_bed_in_narration:
                 video_bgm = None
+            # YouTube panel clips are always emitted at 1920×1080 (landscape cinematic: full panel + margins).
+            yt_pre = True
             youtube_video = _assemble_video_compat(
-                clips=clips,
+                clips=clips_youtube,
                 narration_path=narration_path,
                 output_path=youtube_path,
                 subtitles_path=subtitles_path,
                 bgm_path=video_bgm,
-                playback_speed=1.0,
+                playback_speed=settings.video_playback_speed,
                 profile="youtube",
+                youtube_clips_preformatted=yt_pre,
             )
-            final_video = _assemble_video_compat(
-                clips=clips,
-                narration_path=narration_path,
-                output_path=final_path,
-                subtitles_path=subtitles_path,
-                bgm_path=video_bgm,
-                playback_speed=settings.reel_playback_speed,
-                profile="reel",
-            )
-            reel_chunks = split_video_chunks(
-                source_video=final_video,
-                output_dir=reel_chunks_dir,
-                max_duration_sec=float(settings.reel_chunk_max_duration_sec),
-            )
+            reel_path = dirs["final"] / "video_reel.mp4"
+            try:
+                reel_working = _assemble_video_compat(
+                    clips=clips_reel,
+                    narration_path=narration_path,
+                    output_path=reel_path,
+                    subtitles_path=subtitles_path,
+                    bgm_path=video_bgm,
+                    playback_speed=settings.reel_playback_speed,
+                    profile="reel",
+                )
+            except Exception as exc:
+                report["warnings"].append(f"Reel portrait assemble failed, falling back to YouTube derivative: {exc}")
+                reel_working = create_reel_derivative(
+                    source_video=youtube_video,
+                    output_video=dirs["final"] / "video_reel_working.mp4",
+                    playback_speed=settings.reel_playback_speed,
+                )
+            try:
+                reel_chunks = split_video_chunks(
+                    source_video=reel_working,
+                    output_dir=reel_chunks_dir,
+                    max_duration_sec=float(settings.reel_chunk_max_duration_sec),
+                )
+            except Exception as exc:
+                report["warnings"].append(f"Reel chunk split failed: {exc}")
+                reel_chunks = []
 
             keep_paths = {
-                Path(str(final_video)),
                 Path(str(youtube_video)),
+                Path(str(reel_working)),
             }
             keep_paths.update(reel_chunks)
             if settings.run_keep_video_intermediates:
@@ -342,21 +380,32 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
                 _prune_final_artifacts(dirs["final"], keep_paths)
             _enforce_stage_timeout("video_editor", stage_start)
             report["stages"]["video_editor"] = {
-                "video_path": str(final_video),
+                "video_path": str(youtube_video),
                 "youtube_video_path": str(youtube_video),
-                "reel_video_path": str(final_video),
+                "reel_video_path": str(reel_working),
                 "reel_chunk_paths": [str(p) for p in reel_chunks],
-                "deliverables": ["video_youtube.mp4", "video.mp4"],
+                "narration_music_source": nms,
+                "mux_extra_bgm_path": str(video_bgm) if video_bgm else None,
+                "audio_note": (
+                    "Bed is inside narration MP3 (no second BGM mux)."
+                    if not video_bgm and nms in ("bgm_default", "bgm_library", "elevenlabs")
+                    else (
+                        "Extra BGM from BGM_DEFAULT_PATH mixed at mux."
+                        if video_bgm
+                        else "No scene bed in narration and no BGM_DEFAULT_PATH — voice only unless you set BGM_DEFAULT_PATH."
+                    )
+                ),
+                "deliverables": ["video_youtube.mp4", "video_reel.mp4", "reels/chunks/*.mp4"],
             }
 
         with StageTimer(logger, "quality_checker"):
             stage_start = time.time()
-            qc = check_video(final_video)
+            qc = check_video(youtube_video)
             _enforce_stage_timeout("quality_checker", stage_start)
             report["stages"]["quality_checker"] = qc.model_dump()
 
         if not settings.run_keep_intermediate_clips:
-            for clip_path in clips:
+            for clip_path in clips_youtube + clips_reel:
                 try:
                     clip_path.unlink(missing_ok=True)
                 except OSError:
@@ -374,7 +423,7 @@ def generate_video(payload: GenerateRequest) -> GenerateResponse:
         write_json(report_path, report)
         return GenerateResponse(
             status="completed",
-            video_path=str(final_video),
+            video_path=str(youtube_video),
             audio_path=str(narration_path),
             quality=audio_meta.get("quality", "cinematic"),
             report_path=str(report_path),

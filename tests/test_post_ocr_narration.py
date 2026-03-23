@@ -33,3 +33,10 @@ def test_filter_ocr_narration_strips_embedded_sfx_tokens_from_spoken_text():
     assert out[0].text == "Hey, move now!"
     assert out[0].sfx_cues == ["thump", "cough"]
 
+
+def test_filter_ocr_narration_can_disable_sfx_cues_but_keep_cleanup():
+    lines = [SrtTimelineLine(index=1, start_sec=0.0, end_sec=2.0, text="CLOMP Hey, move now! COUGH")]
+    out = filter_ocr_narration_and_extract_sfx(lines, emit_sfx_cues=False)
+    assert out[0].text == "Hey, move now!"
+    assert out[0].sfx_cues == []
+

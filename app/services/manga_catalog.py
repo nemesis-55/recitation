@@ -131,6 +131,40 @@ def search_titles(query: str | None = None, genre: str | None = None, limit: int
     }
 
 
+def _configured_genre_slugs() -> list[str]:
+    """Genre keys from WEBTOON_CATALOG_GENRE_URLS_JSON (object form), for UI dropdown before first crawl."""
+    raw = settings.webtoon_catalog_genre_urls_json
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    if isinstance(parsed, dict):
+        return sorted({str(k).strip().lower() for k in parsed.keys() if str(k).strip()})
+    return []
+
+
+def list_genres() -> list[str]:
+    """Distinct genre slugs: configured in .env first, then merged with catalog on disk."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for g in _configured_genre_slugs():
+        if g not in seen:
+            seen.add(g)
+            ordered.append(g)
+    payload = load_catalog()
+    for block in payload.get("genres", []):
+        if not isinstance(block, dict):
+            continue
+        slug = str(block.get("genre", "")).strip().lower()
+        if slug and slug not in seen:
+            seen.add(slug)
+            ordered.append(slug)
+    ordered.sort()
+    return ordered
+
+
 def list_episodes(title_slug: str) -> list[dict[str, Any]]:
     wanted = title_slug.strip().lower()
     payload = load_catalog()

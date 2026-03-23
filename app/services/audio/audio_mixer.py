@@ -1,28 +1,28 @@
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
 
 from app.config import settings
 from app.services.audio.timeline_builder import AudioEvent
 from app.utils.ffmpeg_runner import probe_duration_seconds, run_ffmpeg
+from app.utils.pipeline_debug import log_pipeline_debug
 
-_DEBUG_LOG_PATH = Path("/Users/nemesis/Desktop/project/manga_recitation/.cursor/debug-4a522c.log")
 
-
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    payload = {
-        "sessionId": "4a522c",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+def _music_stem_processing_chain() -> str:
+    """
+    FFmpeg filters applied to the **music bed only** (after atrim to scene length, before volume).
+    Improves clarity under voice without changing duration or voice/SFX timing.
+    """
+    parts: list[str] = []
+    hp = int(getattr(settings, "audio_mixer_music_highpass_hz", 0) or 0)
+    if hp > 0:
+        parts.append(f"highpass=f={max(20, min(500, hp))}")
+    if bool(getattr(settings, "audio_mixer_music_dynaudnorm_enabled", True)):
+        parts.append("dynaudnorm=f=200:g=9")
+    if not parts:
+        return ""
+    # No leading comma: callers append `,{stem},` after atrim or after `[music_bus]` (see layered path).
+    return ",".join(parts)
 
 
 def _mix_target_duration_sec(events: list[AudioEvent]) -> float:
@@ -105,7 +105,7 @@ def _mix_audio_sequential_voice_music(
 
     filters.append(f"{''.join(concat_refs)}concat=n={len(concat_refs)}:v=0:a=1[voice_out]")
     # region agent log
-    _debug_log(
+    log_pipeline_debug(
         run_id="pre-fix-1",
         hypothesis_id="H2",
         location="audio_mixer.py:_mix_audio_sequential_voice_music",
@@ -143,7 +143,13 @@ def _mix_audio_sequential_voice_music(
         cmd.extend(["-stream_loop", "-1", "-i", str(music_events[0].file)])
         music_idx = input_idx
         music_gain = max(0.05, min(0.3, float(settings.audio_mixer_music_gain or 0.18)))
-        filters.append(f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},volume={music_gain:.3f}[music_out]")
+        stem = _music_stem_processing_chain()
+        if stem:
+            filters.append(
+                f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},{stem},volume={music_gain:.3f}[music_out]"
+            )
+        else:
+            filters.append(f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},volume={music_gain:.3f}[music_out]")
         if settings.audio_mixer_ducking_enabled:
             filters.append(
                 "[music_out][voice_out]sidechaincompress="
@@ -182,7 +188,7 @@ def _mix_audio_sequential_voice_music(
     )
     run_ffmpeg(cmd, stage="audio_mixer")
     # region agent log
-    _debug_log(
+    log_pipeline_debug(
         run_id="pre-fix-1",
         hypothesis_id="H2",
         location="audio_mixer.py:_mix_audio_sequential_voice_music",
@@ -345,7 +351,13 @@ def _mix_audio_rescue(
         cmd.extend(["-stream_loop", "-1", "-i", str(music_events[0].file)])
         music_idx = input_idx
         music_gain = max(0.05, min(0.3, float(settings.audio_mixer_music_gain or 0.18)))
-        filters.append(f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},volume={music_gain:.3f}[music_out]")
+        stem = _music_stem_processing_chain()
+        if stem:
+            filters.append(
+                f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},{stem},volume={music_gain:.3f}[music_out]"
+            )
+        else:
+            filters.append(f"[{music_idx}:a]atrim=0:{target_duration_sec:.3f},volume={music_gain:.3f}[music_out]")
         if settings.audio_mixer_ducking_enabled:
             filters.append(
                 "[music_out][0:a]sidechaincompress="
@@ -397,7 +409,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
         raise ValueError("audio_mixer requires at least one voice/pause event")
     target_duration_sec = _mix_target_duration_sec(voice_events + sfx_events)
     # region agent log
-    _debug_log(
+    log_pipeline_debug(
         run_id="pre-fix-1",
         hypothesis_id="H1",
         location="audio_mixer.py:mix_audio",
@@ -420,7 +432,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
     # Build a deterministic sequential voice track for those runs.
     if len(voice_events) >= 24:
         # region agent log
-        _debug_log(
+        log_pipeline_debug(
             run_id="pre-fix-1",
             hypothesis_id="H1",
             location="audio_mixer.py:mix_audio",
@@ -437,7 +449,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
                         f"audio_mixer_truncated actual={actual_sec:.3f}s target={target_duration_sec:.3f}s"
                     )
                 # region agent log
-                _debug_log(
+                log_pipeline_debug(
                     run_id="pre-fix-1",
                     hypothesis_id="H2",
                     location="audio_mixer.py:mix_audio",
@@ -447,7 +459,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
                 # endregion
             except Exception as exc:
                 # region agent log
-                _debug_log(
+                log_pipeline_debug(
                     run_id="pre-fix-1",
                     hypothesis_id="H2",
                     location="audio_mixer.py:mix_audio",
@@ -456,7 +468,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
                 )
                 # endregion
                 # region agent log
-                _debug_log(
+                log_pipeline_debug(
                     run_id="pre-fix-1",
                     hypothesis_id="H5",
                     location="audio_mixer.py:mix_audio",
@@ -467,7 +479,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
                 _mix_audio_rescue(voice_events, sfx_events, music_events, output_path, target_duration_sec, work_dir)
                 repaired_sec = float(probe_duration_seconds(output_path))
                 # region agent log
-                _debug_log(
+                log_pipeline_debug(
                     run_id="pre-fix-1",
                     hypothesis_id="H5",
                     location="audio_mixer.py:mix_audio",
@@ -553,7 +565,11 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
     else:
         filters.append(f"anullsrc=r=44100:cl=mono,atrim=0:{target_duration_sec:.3f}[music_bus]")
     music_gain = max(0.05, min(0.3, float(settings.audio_mixer_music_gain or 0.18)))
-    filters.append(f"[music_bus]volume={music_gain:.3f}[music_out]")
+    stem = _music_stem_processing_chain()
+    if stem:
+        filters.append(f"[music_bus]{stem},volume={music_gain:.3f}[music_out]")
+    else:
+        filters.append(f"[music_bus]volume={music_gain:.3f}[music_out]")
 
     if settings.audio_mixer_ducking_enabled:
         filters.append(
@@ -594,7 +610,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
         stage="audio_mixer",
     )
     # region agent log
-    _debug_log(
+    log_pipeline_debug(
         run_id="pre-fix-1",
         hypothesis_id="H1",
         location="audio_mixer.py:mix_audio",
@@ -611,7 +627,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
                     f"audio_mixer_truncated actual={actual_sec:.3f}s target={target_duration_sec:.3f}s"
                 )
             # region agent log
-            _debug_log(
+            log_pipeline_debug(
                 run_id="pre-fix-1",
                 hypothesis_id="H3",
                 location="audio_mixer.py:mix_audio",
@@ -621,7 +637,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
             # endregion
         except Exception as exc:
             # region agent log
-            _debug_log(
+            log_pipeline_debug(
                 run_id="pre-fix-1",
                 hypothesis_id="H3",
                 location="audio_mixer.py:mix_audio",
@@ -630,7 +646,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
             )
             # endregion
             # region agent log
-            _debug_log(
+            log_pipeline_debug(
                 run_id="pre-fix-1",
                 hypothesis_id="H5",
                 location="audio_mixer.py:mix_audio",
@@ -641,7 +657,7 @@ def mix_audio(events: list[AudioEvent], output_path: Path, work_dir: Path, music
             _mix_audio_rescue(voice_events, sfx_events, music_events, output_path, target_duration_sec, work_dir)
             repaired_sec = float(probe_duration_seconds(output_path))
             # region agent log
-            _debug_log(
+            log_pipeline_debug(
                 run_id="pre-fix-1",
                 hypothesis_id="H5",
                 location="audio_mixer.py:mix_audio",

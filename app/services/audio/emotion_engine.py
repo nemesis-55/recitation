@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from app.config import settings
 from app.utils.cache_utils import hash_text, read_cache_json, write_cache_json
+from app.services.audio.emotion_constants import ALLOWED_EMOTIONS, emotion_prompt_list
 
 
 def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default_intensity: float) -> tuple[str, float]:
@@ -19,6 +20,7 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
     cache_key = hash_text(
         json.dumps(
             {
+                "emotion_schema": "v4",
                 "text": text,
                 "scene_emotion": scene_emotion,
                 "default_emotion": base_emotion,
@@ -33,7 +35,7 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
     if isinstance(cached, dict):
         try:
             emo = str(cached.get("emotion", base_emotion)).strip().lower()
-            if emo not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
+            if emo not in ALLOWED_EMOTIONS:
                 emo = base_emotion
             inten = float(cached.get("intensity", base_intensity))
             inten = max(0.0, min(1.0, inten))
@@ -42,10 +44,12 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
             pass
 
     prompt = (
+        "You are an advanced cinematic manga narrator focused on faithful delivery.\n"
         "Classify the line emotion for performance.\n"
         "Return ONLY raw JSON with keys emotion and intensity.\n"
-        "emotion must be one of: angry, fear, sad, happy, neutral, surprised, curious, confused.\n"
+        f"emotion must be one of: {emotion_prompt_list()}.\n"
         "intensity must be float 0..1.\n"
+        "Do not rewrite the line and do not invent details.\n"
         f"scene_emotion: {scene_emotion}\n"
         f"line: {text}"
     )
@@ -61,7 +65,7 @@ def analyze_emotion(text: str, scene_emotion: str, default_emotion: str, default
     try:
         parsed = json.loads(raw)
         emo = str(parsed.get("emotion", base_emotion)).strip().lower()
-        if emo not in {"angry", "fear", "sad", "happy", "neutral", "surprised", "curious", "confused"}:
+        if emo not in ALLOWED_EMOTIONS:
             emo = base_emotion
         inten = float(parsed.get("intensity", base_intensity))
         inten = max(0.0, min(1.0, inten))

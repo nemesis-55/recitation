@@ -75,6 +75,17 @@ def _duration_for_intensity(intensity: float) -> float:
 def generate_sfx_to_file(prompt: str, duration_seconds: float, output_path: Path) -> None:
     if not settings.elevenlabs_sfx_enabled:
         raise ProviderError("sfx_engine", "elevenlabs", "ELEVENLABS_SFX_ENABLED is false", "ELEVENLABS_SFX_DISABLED")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    safe_duration = max(0.5, min(30.0, float(duration_seconds)))
+    safe_influence = max(0.0, min(1.0, float(settings.elevenlabs_sfx_prompt_influence)))
+    cache_key = hash_text(
+        f"sfx_runtime|{prompt.strip()}|{safe_duration:.3f}|{settings.elevenlabs_sfx_model_id}|"
+        f"{settings.elevenlabs_sfx_output_format}|{safe_influence:.3f}"
+    )
+    cached = read_cache_bytes("elevenlabs_sfx", cache_key)
+    if cached:
+        output_path.write_bytes(cached)
+        return
     headers = {
         "xi-api-key": str(settings.elevenlabs_api_key),
         "Content-Type": "application/json",
@@ -83,8 +94,8 @@ def generate_sfx_to_file(prompt: str, duration_seconds: float, output_path: Path
     url = f"{settings.elevenlabs_api_base_url.rstrip('/')}/v1/sound-generation?output_format={settings.elevenlabs_sfx_output_format}"
     payload = {
         "text": prompt,
-        "duration_seconds": max(0.5, min(30.0, float(duration_seconds))),
-        "prompt_influence": max(0.0, min(1.0, float(settings.elevenlabs_sfx_prompt_influence))),
+        "duration_seconds": safe_duration,
+        "prompt_influence": safe_influence,
         "model_id": settings.elevenlabs_sfx_model_id,
     }
     for attempt in range(settings.provider_retries + 1):
@@ -95,6 +106,7 @@ def generate_sfx_to_file(prompt: str, duration_seconds: float, output_path: Path
                 continue
             resp.raise_for_status()
             output_path.write_bytes(resp.content)
+            write_cache_bytes("elevenlabs_sfx", cache_key, resp.content)
             return
         except Exception as exc:
             if attempt >= settings.provider_retries:

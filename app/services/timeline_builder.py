@@ -8,6 +8,12 @@ def _clamp_duration(duration: float) -> float:
     return max(settings.min_panel_duration_sec, min(settings.max_panel_duration_sec, duration))
 
 
+def _youtube_motion_presets() -> list[str]:
+    raw = (getattr(settings, "panel_youtube_motion_rotation", None) or "center_zoom_out").strip()
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return parts or ["center_zoom_out"]
+
+
 def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: list[AudioSegment]) -> list[TimelineEntry]:
     if not panels:
         return []
@@ -32,7 +38,8 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
             )
     has_audio_timing = len(panel_audio_duration_by_path) > 0
 
-    for panel in panels:
+    motion_presets = _youtube_motion_presets()
+    for idx, panel in enumerate(panels):
         line_group = lines_by_panel_path.get(panel.image_path, [])
         if line_group:
             narration = " ".join([(ln.narration or "").strip() for ln in line_group if (ln.narration or "").strip()]).strip()
@@ -49,6 +56,7 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
             dur = max(settings.min_panel_duration_sec, 2.0)
         start = cursor
         end = start + dur
+        yt_motion = motion_presets[idx % len(motion_presets)]
         out.append(
             TimelineEntry(
                 panel_path=panel.image_path,
@@ -56,6 +64,7 @@ def build_timeline(panels: list[PanelAsset], script: list[ScriptLine], audio: li
                 start_sec=start,
                 end_sec=end,
                 duration_sec=dur,
+                youtube_motion=yt_motion,
             )
         )
         cursor = end
@@ -88,6 +97,7 @@ def build_timeline_from_srt(panels: list[PanelAsset], srt_lines: list[SrtTimelin
     if not panels or not srt_lines:
         return []
     count = min(len(panels), len(srt_lines))
+    motion_presets = _youtube_motion_presets()
     out: list[TimelineEntry] = []
     for i in range(count):
         panel = panels[i]
@@ -101,6 +111,7 @@ def build_timeline_from_srt(panels: list[PanelAsset], srt_lines: list[SrtTimelin
                 start_sec=start,
                 end_sec=end,
                 duration_sec=end - start,
+                youtube_motion=motion_presets[i % len(motion_presets)],
             )
         )
     return out

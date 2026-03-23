@@ -16,6 +16,17 @@ def test_ops_manga_api_route(monkeypatch):
     assert payload["items"][0]["title_slug"] == "omniscient-reader"
 
 
+def test_ops_manga_genres_route(monkeypatch):
+    monkeypatch.setattr(
+        "app.routes.ops.list_genres",
+        lambda: ["action", "romance"],
+    )
+    client = TestClient(app)
+    response = client.get("/ops/api/manga/genres")
+    assert response.status_code == 200
+    assert response.json() == {"genres": ["action", "romance"]}
+
+
 def test_ops_manga_episodes_route(monkeypatch):
     monkeypatch.setattr(
         "app.routes.ops.list_episodes",
@@ -27,6 +38,8 @@ def test_ops_manga_episodes_route(monkeypatch):
     payload = response.json()
     assert payload["total"] == 1
     assert payload["episodes"][0]["episode_no"] == 1
+    assert payload.get("source") == "webtoon_catalog_cache"
+    assert "catalog_path" in payload
 
 
 def test_ops_generate_range_route(monkeypatch):
@@ -50,6 +63,29 @@ def test_ops_generate_range_route(monkeypatch):
     payload = response.json()
     assert payload["status"] == "completed"
     assert payload["submitted"] == 2
+
+
+def test_ops_generate_range_route_accepts_episode_from_to(monkeypatch):
+    monkeypatch.setattr(
+        "app.routes.ops.run_episode_range_sequential",
+        lambda payload: {
+            "status": "completed",
+            "title_slug": payload.title_slug,
+            "submitted": 3,
+            "completed": 3,
+            "failed": 0,
+            "results": [],
+        },
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/ops/api/generate-range",
+        json={"title_slug": "omniscient-reader", "episode_from": 1, "episode_to": 3},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["submitted"] == 3
 
 
 def test_ops_generate_range_route_accepts_episode_numbers(monkeypatch):

@@ -211,7 +211,8 @@ def extract_text(panel: PanelAsset) -> OcrResult:
     prompt = (
         "Extract ALL readable text from this manga panel, including dialogue balloons, narration boxes, "
         "captions, signs, and visible labels. Preserve reading order top-to-bottom then left-to-right. "
-        "Do not summarize or rewrite; return exact text transcription only. "
+        "Do not summarize or rewrite; return exact text transcription only. Never invent actions or scene descriptions. "
+        "Do not omit dialogue lines even when text is faint; transcribe best-effort. "
         "Return plain text only, no markdown, no explanations. "
         "If there is no readable text, return an empty string."
     )
@@ -277,7 +278,7 @@ def _extract_text_batch_once(client: OpenAI, panels: list[dict[str, Any]]) -> li
         f"Return EXACTLY {expected_len} JSON items in the same order as images.\n"
         'Output only a raw JSON array of objects with keys: "text", "confidence".\n'
         '"text" is a verbatim transcription of ALL readable panel text (dialogue, captions, labels) in reading order; '
-        "do not summarize or omit lines. "
+        "do not summarize or omit lines. Never invent actions or scene descriptions. "
         '"confidence" is 0.0..1.0.\n'
         "No markdown, no prose, no extra keys.\n"
         '[{"text":"Hello","confidence":0.91},{"text":"","confidence":0.0}]'

@@ -69,3 +69,5 @@ def test_audio_pipeline_avoids_voice_overlap(monkeypatch, tmp_path: Path):
     assert first.start + first.duration <= second.start + 1e-6
     assert segments[0].end_sec <= segments[1].start_sec + 1e-6
     assert timeline[0]["duration"] >= 2.0 - 1e-6
+    assert lines[0].performance_text == segments[0].rendered_text
+    assert lines[1].performance_text == segments[1].rendered_text

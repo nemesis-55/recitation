@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from app.config import settings
 from app.models.schemas import SrtTimelineLine
+from app.utils.cache_utils import hash_text, read_cache_json, write_cache_json
 
 
 def _fallback_segment(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
@@ -44,10 +45,9 @@ def _fallback_segment(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
 def _segment_chunk(chunk: list[SrtTimelineLine], chunk_start: int, expected_total: int) -> list[dict[str, Any]]:
     prompt_lines = [f"{ln.index}. [{ln.speaker}|{ln.emotion}] {ln.text}" for ln in chunk]
     prompt = (
-        "Segment this episode into coherent scenes based on location, continuous dialogue and character continuity.\n"
-        "Return ONLY raw JSON array. Each item keys: scene_id, panel_range [start,end], description.\n"
+        "Segment these lines into coherent scenes by continuity.\n"
+        "Return JSON array only. Each item keys: scene_id, panel_range [start,end], description.\n"
         "panel_range is 1-indexed and inclusive.\n"
-        "No markdown.\n"
         "Lines:\n" + "\n".join(prompt_lines)
     )
     client = OpenAI(api_key=settings.openai_api_key, max_retries=0)
@@ -155,6 +155,54 @@ def segment_scenes(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
     window = max(40, int(settings.scene_segment_window_size))
     overlap = max(0, min(window - 5, int(settings.scene_segment_overlap)))
     step = max(1, window - overlap)
+    model = settings.openai_dialogue_analysis_model or settings.openai_model
+    cache_key = hash_text(
+        json.dumps(
+            {
+                "model": model,
+                "window": window,
+                "overlap": overlap,
+                "lines": [
+                    {
+                        "index": int(ln.index),
+                        "start_sec": round(float(ln.start_sec), 3),
+                        "end_sec": round(float(ln.end_sec), 3),
+                        "speaker": str(ln.speaker or ""),
+                        "emotion": str(ln.emotion or ""),
+                        "text": str(ln.text or ""),
+                    }
+                    for ln in lines
+                ],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    )
+    cached = read_cache_json("scene_segmenter", cache_key)
+    if isinstance(cached, list) and cached:
+        out: list[dict[str, Any]] = []
+        for item in cached:
+            if not isinstance(item, dict):
+                continue
+            pr = item.get("panel_range")
+            if not isinstance(pr, list) or len(pr) != 2:
+                continue
+            try:
+                lo = int(pr[0])
+                hi = int(pr[1])
+            except Exception:
+                continue
+            lo = max(1, min(total, lo))
+            hi = max(lo, min(total, hi))
+            out.append(
+                {
+                    "scene_id": int(item.get("scene_id") or (len(out) + 1)),
+                    "panel_range": [lo, hi],
+                    "description": str(item.get("description") or f"scene_{len(out) + 1}"),
+                }
+            )
+        if out:
+            return out
     all_ranges: list[dict[str, Any]] = []
     for start in range(0, total, step):
         end = min(total, start + window)
@@ -168,5 +216,6 @@ def segment_scenes(lines: list[SrtTimelineLine]) -> list[dict[str, Any]]:
     merged = _merge_scene_ranges(all_ranges, total_lines=total)
     if not merged:
         return _fallback_segment(lines)
+    write_cache_json("scene_segmenter", cache_key, merged)
     return merged
 

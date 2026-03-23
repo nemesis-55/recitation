@@ -29,6 +29,9 @@ def test_mix_audio_uses_bounded_output_and_first_duration_for_music(monkeypatch,
     assert "duration=first" in filter_graph
     assert "atrim=0:" in filter_graph
     assert "apad" not in filter_graph
+    # Music bed preprocessing (default): HPF + dynaudnorm on bed only; voice timing unchanged.
+    assert "highpass=f=100" in filter_graph or "highpass=f=" in filter_graph
+    assert "dynaudnorm" in filter_graph
 
 
 def test_mix_audio_builds_voice_anchor_for_delayed_lines(monkeypatch, tmp_path: Path):
